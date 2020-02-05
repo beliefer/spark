@@ -791,6 +791,18 @@ class PlanParserSuite extends AnalysisTest {
     }
 
     assertOverlayPlans(
+      "-- single comment\nSELECT OVERLAY('Spark SQL' PLACING '_' FROM 6)",
+      new Overlay(Literal("Spark SQL"), Literal("_"), Literal(6))
+    )
+
+    assertOverlayPlans(
+      """/* This is an example of SQL which should not execute:\n
+        | * select 'multi-line';\n
+        | */SELECT OVERLAY('Spark SQL' PLACING '_' FROM 6)""".stripMargin,
+      new Overlay(Literal("Spark SQL"), Literal("_"), Literal(6))
+    )
+
+    assertOverlayPlans(
       "SELECT OVERLAY('Spark SQL' PLACING '_' FROM 6)",
       new Overlay(Literal("Spark SQL"), Literal("_"), Literal(6))
     )

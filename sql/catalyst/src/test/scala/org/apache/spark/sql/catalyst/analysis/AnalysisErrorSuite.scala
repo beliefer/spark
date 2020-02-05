@@ -165,6 +165,16 @@ class AnalysisErrorSuite extends AnalysisTest {
     "Distinct window functions are not supported" :: Nil)
 
   errorTest(
+    "test comments",
+    CatalystSqlParser.parsePlan("-- single comment\nSELECT hex(DISTINCT a) FROM TaBlE"),
+    "DISTINCT or FILTER specified, but hex is not an aggregate function" :: Nil)
+
+  errorTest(
+    "multi comments",
+    CatalystSqlParser.parsePlan("/* multi comments\n */SELECT hex(DISTINCT a) FROM TaBlE"),
+    "DISTINCT or FILTER specified, but hex is not an aggregate function" :: Nil)
+
+  errorTest(
     "distinct function",
     CatalystSqlParser.parsePlan("SELECT hex(DISTINCT a) FROM TaBlE"),
     "DISTINCT or FILTER specified, but hex is not an aggregate function" :: Nil)
