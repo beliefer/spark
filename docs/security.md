@@ -138,13 +138,14 @@ is still required when talking to shuffle services from Spark versions older tha
 The following table describes the different options available for configuring this feature.
 
 <table class="table">
-<tr><th>Property Name</th><th>Default</th><th>Meaning</th></tr>
+<tr><th>Property Name</th><th>Default</th><th>Meaning</th><th>Since Version</th></tr>
 <tr>
   <td><code>spark.network.crypto.enabled</code></td>
   <td>false</td>
   <td>
     Enable AES-based RPC encryption, including the new authentication protocol added in 2.2.0.
   </td>
+  <td>2.2.0</td>
 </tr>
 <tr>
   <td><code>spark.network.crypto.keyLength</code></td>
@@ -152,6 +153,7 @@ The following table describes the different options available for configuring th
   <td>
     The length in bits of the encryption key to generate. Valid values are 128, 192 and 256.
   </td>
+  <td></td>
 </tr>
 <tr>
   <td><code>spark.network.crypto.keyFactoryAlgorithm</code></td>
@@ -160,6 +162,7 @@ The following table describes the different options available for configuring th
     The key factory algorithm to use when generating encryption keys. Should be one of the
     algorithms supported by the javax.crypto.SecretKeyFactory class in the JRE being used.
   </td>
+  <td></td>
 </tr>
 <tr>
   <td><code>spark.network.crypto.config.*</code></td>
@@ -169,6 +172,7 @@ The following table describes the different options available for configuring th
     use. The config name should be the name of commons-crypto configuration without the
     <code>commons.crypto</code> prefix.
   </td>
+  <td></td>
 </tr>
 <tr>
   <td><code>spark.network.crypto.saslFallback</code></td>
@@ -179,6 +183,7 @@ The following table describes the different options available for configuring th
     do not support the internal Spark authentication protocol. On the shuffle service side,
     disabling this feature will block older clients from authenticating.
   </td>
+  <td>2.2.0</td>
 </tr>
 <tr>
   <td><code>spark.authenticate.enableSaslEncryption</code></td>
@@ -186,6 +191,7 @@ The following table describes the different options available for configuring th
   <td>
     Enable SASL-based encrypted communication.
   </td>
+  <td></td>
 </tr>
 <tr>
   <td><code>spark.network.sasl.serverAlwaysEncrypt</code></td>
@@ -194,6 +200,7 @@ The following table describes the different options available for configuring th
     Disable unencrypted connections for ports using SASL authentication. This will deny connections
     from clients that have authentication enabled, but do not request SASL-based encryption.
   </td>
+  <td></td>
 </tr>
 </table>
 
