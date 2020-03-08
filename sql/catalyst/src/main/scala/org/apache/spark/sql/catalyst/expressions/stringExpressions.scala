@@ -2255,6 +2255,144 @@ case class FormatNumber(x: Expression, d: Expression)
   override def prettyName: String = "format_number"
 }
 
+object ToNumber {
+  def convert(input: UTF8String, pattern: UTF8String): UTF8String = {
+    val inputStr = input.toString
+    val patternStr = pattern.toString.toUpperCase(Locale.ROOT).replaceAll("FM", "")
+    val hasSign = inputStr.startsWith("-") ||
+      (patternStr.contains('S') && inputStr.contains('-')) ||
+      (patternStr.contains("MI") && inputStr.contains('-')) ||
+      (patternStr.contains("PR") && inputStr.startsWith("<"))
+    val (newInputStr, newPatternStr) = if (hasSign) {
+      (inputStr.replaceAll("-|<|>", ""), patternStr.replaceAll("S|(MI)|(PR)|(FM)", ""))
+    } else {
+      (inputStr, patternStr.replaceAll("FM", ""))
+    }
+    val builder = new UTF8StringBuilder
+    var indexOfString = 0
+    var hasPoint = false
+    newPatternStr.foreach { c =>
+      if (newInputStr.length > indexOfString) {
+        val currentChar = newInputStr(indexOfString)
+        c match {
+          case '9' | '0' if Character.isDigit(currentChar) =>
+            builder.append(newInputStr.substring(indexOfString, indexOfString + 1))
+            indexOfString += 1
+          case '9' | '0' | ' ' if currentChar == '.' =>
+            if (builder.build.numChars == 0) {
+              builder.append("0")
+            }
+          case '9' | '0' if currentChar == ',' =>
+          case '.' | 'D' if currentChar.equals('.') =>
+            hasPoint = true
+            builder.append(newInputStr.substring(indexOfString, indexOfString + 1))
+            indexOfString += 1
+          case ',' | 'G' if currentChar.equals(',') =>
+            indexOfString += 1
+          case ',' | 'G' if Character.isDigit(currentChar) =>
+          case 'L' =>
+            while (Character.isLetter(newInputStr(indexOfString)) ||
+              newInputStr(indexOfString) == '$') {
+              indexOfString += 1
+            }
+          case _ =>
+            indexOfString += 1
+        }
+      }
+    }
+
+    val buildUTF8String = builder.build
+    if (buildUTF8String.numChars > 0) {
+      val doubleVal = java.lang.Double.valueOf(buildUTF8String.toString)
+      var decimal = java.math.BigDecimal.valueOf(doubleVal).stripTrailingZeros
+      if (hasSign) {
+        decimal = decimal.negate
+      }
+      UTF8String.fromString(decimal.toPlainString)
+    } else {
+      UTF8String.fromString("")
+    }
+  }
+}
+
+/**
+ * A function that converts string to numeric.
+ */
+@ExpressionDescription(
+  usage = """
+    _FUNC_(strExpr, patternExpr) - Convert `strExpr` to a number based on the `patternExpr`.
+    The pattern can consist of the following characters:
+      '9':  digit position (can be dropped if insignificant)
+      '0':  digit position (will not be dropped, even if insignificant)
+      '.':  decimal point (only allowed once)
+      ',':  group (thousands) separator
+      'PR': negative value in angle brackets
+      'S':  sign anchored to number (uses locale)
+      'L':  currency symbol (uses locale)
+      'D':  decimal point (uses locale)
+      'G':  group separator (uses locale)
+      'MI': minus sign in specified position (if number < 0)
+  """,
+  examples = """
+    Examples:
+      > SELECT _FUNC_('4540', '999');
+       454
+      > SELECT _FUNC_('454.00', '000D00');
+       454
+      > SELECT _FUNC_('12,454.8-', '99G999D9S');
+       -12454.8
+      > SELECT _FUNC_('CNY234234.4350', 'L999999.0000');
+       234234.435
+  """)
+case class ToNumber(left: Expression, right: Expression)
+  extends BinaryExpression with ImplicitCastInputTypes with NullIntolerant {
+
+  // scalastyle:off caselocale
+  @transient private lazy val pattern: Option[String] = {
+    if (right.foldable) {
+      Option(right.eval()).map(_.toString.toUpperCase(Locale.ROOT).replaceAll("FM", ""))
+    } else None
+  }
+  // scalastyle:on caselocale
+
+  override def dataType: DataType = StringType
+  override def inputTypes: Seq[DataType] = Seq(StringType, StringType)
+
+  override def checkInputDataTypes(): TypeCheckResult = {
+    val inputTypeCheck = super.checkInputDataTypes()
+    if(inputTypeCheck.isSuccess && pattern.isDefined) {
+      val patternStr = pattern.get
+      if (patternStr.count{ c => c == '.' || c == 'D'} > 1) {
+        TypeCheckResult.TypeCheckFailure(s"Multiple decimal points in $patternStr")
+      } else if (patternStr.count(_ == 'S') > 1) {
+        TypeCheckResult.TypeCheckFailure(s"Cannot use 'S' twice.")
+      } else if (patternStr.contains('S') && patternStr.contains("PR")) {
+        TypeCheckResult.TypeCheckFailure(s"Cannot use 'S' and 'PR' together.")
+      } else if (patternStr.contains('S') && patternStr.contains("MI")) {
+        TypeCheckResult.TypeCheckFailure(s"Cannot use 'S' and 'MI' together.")
+      } else {
+        inputTypeCheck
+      }
+    } else {
+      inputTypeCheck
+    }
+  }
+
+  override def nullSafeEval(string: Any, pattern: Any): Any = {
+    val input = string.asInstanceOf[UTF8String]
+    val patternStr = pattern.asInstanceOf[UTF8String]
+    ToNumber.convert(input, patternStr)
+  }
+
+  override def prettyName: String = "to_number"
+
+  override def doGenCode(ctx: CodegenContext, ev: ExprCode): ExprCode = {
+    nullSafeCodeGen(ctx, ev, (l, r) => {
+      s"${ev.value} = org.apache.spark.sql.catalyst.expressions.ToNumber.convert($l, $r);"
+    })
+  }
+}
+
 /**
  * Splits a string into arrays of sentences, where each sentence is an array of words.
  * The 'lang' and 'country' arguments are optional, and if omitted, the default locale is used.
