@@ -195,6 +195,11 @@ class SQLQueryTestSuite extends QueryTest with SharedSparkSession {
    */
   protected trait AnsiTest
 
+  /**
+   * traits that indicate test case contains bracketed comments.
+   */
+  protected trait BracketedCommentsTest
+
   protected trait UDFTest {
     val udf: TestUDF
   }
@@ -203,9 +208,21 @@ class SQLQueryTestSuite extends QueryTest with SharedSparkSession {
   protected case class RegularTestCase(
       name: String, inputFile: String, resultFile: String) extends TestCase
 
+  /** A regular test case related to bracketed comments. */
+  protected case class BracketedCommentsTestCase(
+      name: String,
+      inputFile: String,
+      resultFile: String) extends TestCase with BracketedCommentsTest
+
   /** A PostgreSQL test case. */
   protected case class PgSQLTestCase(
       name: String, inputFile: String, resultFile: String) extends TestCase with PgSQLTest
+
+  /** A PostgreSQL test case related to bracketed comments. */
+  protected case class PgSQLBracketedCommentsTestCase(
+      name: String,
+      inputFile: String,
+      resultFile: String) extends TestCase with PgSQLTest with BracketedCommentsTest
 
   /** A UDF test case. */
   protected case class UDFTestCase(
@@ -275,33 +292,33 @@ class SQLQueryTestSuite extends QueryTest with SharedSparkSession {
     }.flatten
 
     val allCode = importedCode ++ code
-    val tempQueries = if (allCode.exists(_.trim.startsWith("--QUERY-DELIMITER"))) {
-      // Although the loop is heavy, only used for bracketed comments test.
-      val querys = new ArrayBuffer[String]
-      val otherCodes = new ArrayBuffer[String]
-      var tempStr = ""
-      var start = false
-      for (c <- allCode) {
-        if (c.trim.startsWith("--QUERY-DELIMITER-START")) {
-          start = true
-          querys ++= splitWithSemicolon(otherCodes.toSeq)
-          otherCodes.clear()
-        } else if (c.trim.startsWith("--QUERY-DELIMITER-END")) {
-          start = false
-          querys += s"\n${tempStr.stripSuffix(";")}"
-          tempStr = ""
-        } else if (start) {
-          tempStr += s"\n$c"
-        } else {
-          otherCodes += c
+    val tempQueries = testCase match {
+      case _: BracketedCommentsTest =>
+        // Although the loop is heavy, only used for bracketed comments test.
+        val querys = new ArrayBuffer[String]
+        val otherCodes = new ArrayBuffer[String]
+        var tempStr = ""
+        var start = false
+        for (c <- allCode) {
+          if (c.trim.startsWith("--QUERY-DELIMITER-START")) {
+            start = true
+            querys ++= splitWithSemicolon(otherCodes.toSeq)
+            otherCodes.clear()
+          } else if (c.trim.startsWith("--QUERY-DELIMITER-END")) {
+            start = false
+            querys += s"\n${tempStr.stripSuffix(";")}"
+            tempStr = ""
+          } else if (start) {
+            tempStr += s"\n$c"
+          } else {
+            otherCodes += c
+          }
         }
-      }
-      if (otherCodes.nonEmpty) {
-        querys ++= splitWithSemicolon(otherCodes.toSeq)
-      }
-      querys.toSeq
-    } else {
-      splitWithSemicolon(allCode).toSeq
+        if (otherCodes.nonEmpty) {
+          querys ++= splitWithSemicolon(otherCodes.toSeq)
+        }
+        querys.toSeq
+      case _ => splitWithSemicolon(allCode).toSeq
     }
 
     // List of SQL queries to run
@@ -548,9 +565,17 @@ class SQLQueryTestSuite extends QueryTest with SharedSparkSession {
             s"$testCaseName - ${udf.prettyName}", absPath, resultFile, udf)
         }
       } else if (file.getAbsolutePath.startsWith(s"$inputFilePath${File.separator}postgreSQL")) {
-        PgSQLTestCase(testCaseName, absPath, resultFile) :: Nil
+        if (file.getAbsolutePath.startsWith(
+          s"$inputFilePath${File.separator}postgreSQL${File.separator}bracketedComments")) {
+          PgSQLBracketedCommentsTestCase(testCaseName, absPath, resultFile) :: Nil
+        } else {
+          PgSQLTestCase(testCaseName, absPath, resultFile) :: Nil
+        }
       } else if (file.getAbsolutePath.startsWith(s"$inputFilePath${File.separator}ansi")) {
         AnsiTestCase(testCaseName, absPath, resultFile) :: Nil
+      } else if (file.getAbsolutePath.startsWith(
+        s"$inputFilePath${File.separator}bracketedComments")) {
+        BracketedCommentsTestCase(testCaseName, absPath, resultFile) :: Nil
       } else {
         RegularTestCase(testCaseName, absPath, resultFile) :: Nil
       }
