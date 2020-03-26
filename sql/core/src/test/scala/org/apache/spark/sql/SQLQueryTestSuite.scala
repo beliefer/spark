@@ -357,8 +357,16 @@ class SQLQueryTestSuite extends QueryTest with SharedSparkSession {
       configSet: Seq[(String, String)]): Unit = {
     // Create a local SparkSession to have stronger isolation between different test cases.
     // This does not isolate catalog changes.
+    val configs = configSet.map {
+      case (k, v) => s"$k=$v"
+    }
+    val testName = testCase.name
+    val startTime = System.nanoTime()
     val localSparkSession = spark.newSession()
+    val startLoadTime = System.nanoTime()
     loadTestData(localSparkSession)
+    val dataTime = (System.nanoTime() - startLoadTime) / (1000 * 1000)
+    logWarning(s"$testName using configs: ${configs.mkString(",")}. load data time: $dataTime")
 
     testCase match {
       case udfTestCase: UDFTest =>
@@ -386,15 +394,20 @@ class SQLQueryTestSuite extends QueryTest with SharedSparkSession {
       setOperations.foreach(localSparkSession.sql)
     }
 
+    val startRunTime = System.nanoTime()
     // Run the SQL queries preparing them for comparison.
     val outputs: Seq[QueryOutput] = queries.map { sql =>
       val (schema, output) = handleExceptions(getNormalizedResult(localSparkSession, sql))
+      val runTime = (System.nanoTime() - startRunTime) / (1000 * 1000)
+      logWarning(s"$testName using configs: ${configs.mkString(",")}. run time: $runTime")
       // We might need to do some query canonicalization in the future.
       QueryOutput(
         sql = sql,
         schema = schema,
         output = output.mkString("\n").replaceAll("\\s+$", ""))
     }
+    val runTime = (System.nanoTime() - startRunTime) / (1000 * 1000)
+    logWarning(s"$testName using configs: ${configs.mkString(",")}. run time: $runTime")
 
     if (regenerateGoldenFiles) {
       // Again, we are explicitly not using multi-line string due to stripMargin removing "|".
@@ -464,6 +477,8 @@ class SQLQueryTestSuite extends QueryTest with SharedSparkSession {
           s" for query #$i\n${expected.sql}") { output.output }
       }
     }
+    val totalTime = (System.nanoTime() - startTime) / (1000 * 1000)
+    logWarning(s"$testName using configs: ${configs.mkString(",")}. total time: $totalTime")
   }
 
   /**
