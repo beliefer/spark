@@ -397,9 +397,10 @@ class SQLQueryTestSuite extends QueryTest with SharedSparkSession {
     val startRunTime = System.nanoTime()
     // Run the SQL queries preparing them for comparison.
     val outputs: Seq[QueryOutput] = queries.map { sql =>
+      val startQueryTime = System.nanoTime()
       val (schema, output) = handleExceptions(getNormalizedResult(localSparkSession, sql))
-      val runTime = (System.nanoTime() - startRunTime) / (1000 * 1000)
-      logWarning(s"$testName using configs: ${configs.mkString(",")}. run time: $runTime")
+      val queryTime = (System.nanoTime() - startQueryTime) / (1000 * 1000)
+      logWarning(s"$testName using configs: ${configs.mkString(",")}. query time: $queryTime")
       // We might need to do some query canonicalization in the future.
       QueryOutput(
         sql = sql,
