@@ -24,6 +24,7 @@ import scala.collection.mutable
 import scala.util.control.NonFatal
 
 import org.apache.spark.broadcast
+import org.apache.spark.metrics.source.CodegenMetrics
 import org.apache.spark.rdd.RDD
 import org.apache.spark.sql.catalyst.InternalRow
 import org.apache.spark.sql.catalyst.expressions._
@@ -689,6 +690,7 @@ case class WholeStageCodegenExec(child: SparkPlan)(val codegenStageId: Int)
   }
 
   override def doExecute(): RDD[InternalRow] = {
+    val startTime = System.nanoTime()
     val (ctx, cleanedSource) = doCodeGen()
     // try to compile and fallback if it failed
     val (_, compiledCodeStats) = try {
@@ -719,7 +721,7 @@ case class WholeStageCodegenExec(child: SparkPlan)(val codegenStageId: Int)
     // but the output must be rows.
     val rdds = child.asInstanceOf[CodegenSupport].inputRDDs()
     assert(rdds.size <= 2, "Up to two input RDDs can be supported")
-    if (rdds.length == 1) {
+    val newRdd = if (rdds.length == 1) {
       rdds.head.mapPartitionsWithIndex { (index, iter) =>
         val (clazz, _) = CodeGenerator.compile(cleanedSource)
         val buffer = clazz.generate(references).asInstanceOf[BufferedRowIterator]
@@ -753,6 +755,10 @@ case class WholeStageCodegenExec(child: SparkPlan)(val codegenStageId: Int)
         }
       }
     }
+    val endTime = System.nanoTime()
+    def timeMs: Double = (endTime - startTime).toDouble / 1000000
+    CodegenMetrics.METRIC_CODE_GENERATE_TIME.update(timeMs.toLong)
+    newRdd
   }
 
   override def inputRDDs(): Seq[RDD[InternalRow]] = {

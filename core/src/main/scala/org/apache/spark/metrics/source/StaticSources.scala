@@ -34,6 +34,8 @@ object CodegenMetrics extends Source {
   override val sourceName: String = "CodeGenerator"
   override val metricRegistry: MetricRegistry = new MetricRegistry()
 
+  val METRIC_CODE_GENERATE_TIME = metricRegistry.histogram(MetricRegistry.name("codegenTime"))
+
   /**
    * Histogram of the length of source code text compiled by CodeGenerator (in characters).
    */
