@@ -45,7 +45,7 @@ import org.apache.spark.sql.internal.SQLConf
 import org.apache.spark.sql.types._
 import org.apache.spark.unsafe.Platform
 import org.apache.spark.unsafe.types._
-import org.apache.spark.util.{ParentClassLoader, Utils}
+import org.apache.spark.util.{LongAccumulator, ParentClassLoader, Utils}
 
 /**
  * Java source for evaluating an [[Expression]] given a [[InternalRow]] of input.
@@ -1280,6 +1280,9 @@ object ByteCodeStats {
 
 object CodeGenerator extends Logging {
 
+  val compileTime = new java.util.concurrent.atomic.AtomicLong()
+  val compileTime2 = new LongAccumulator
+
   // This is the default value of HugeMethodLimit in the OpenJDK HotSpot JVM,
   // beyond which methods will be rejected from JIT compilation
   final val DEFAULT_JVM_HUGE_METHOD_LIMIT = 8000
@@ -1469,7 +1472,9 @@ object CodeGenerator extends Logging {
           def timeMs: Double = (endTime - startTime).toDouble / NANOS_PER_MILLIS
           CodegenMetrics.METRIC_SOURCE_CODE_SIZE.update(code.body.length)
           CodegenMetrics.METRIC_COMPILATION_TIME.update(timeMs.toLong)
-          logInfo(s"Code generated in $timeMs ms")
+          logWarning(s"Code generated in $timeMs ms")
+          compileTime.getAndAdd(timeMs.toLong)
+          compileTime2.add(timeMs.toLong)
           result
         }
       })

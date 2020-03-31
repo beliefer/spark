@@ -25,10 +25,13 @@ import scala.collection.mutable.{ArrayBuffer, HashMap}
 import scala.util.control.NonFatal
 
 import org.apache.spark.{SparkConf, SparkException}
+import org.apache.spark.metrics.source.CodegenMetrics
+import org.apache.spark.sql.catalyst.expressions.codegen.CodeGenerator
 import org.apache.spark.sql.catalyst.planning.PhysicalOperation
 import org.apache.spark.sql.catalyst.plans.logical._
 import org.apache.spark.sql.catalyst.rules.RuleExecutor
 import org.apache.spark.sql.catalyst.util.{fileToString, stringToFile}
+import org.apache.spark.sql.catalyst.util.DateTimeConstants.{MILLIS_PER_SECOND, NANOS_PER_SECOND}
 import org.apache.spark.sql.execution.HiveResult.hiveResultString
 import org.apache.spark.sql.execution.SQLExecution
 import org.apache.spark.sql.execution.command.{DescribeColumnCommand, DescribeCommandBase}
@@ -36,6 +39,7 @@ import org.apache.spark.sql.internal.SQLConf
 import org.apache.spark.sql.test.SharedSparkSession
 import org.apache.spark.sql.types.StructType
 import org.apache.spark.tags.ExtendedSQLTest
+import org.apache.spark.util.LongAccumulator
 
 /**
  * End-to-end test cases for SQL queries.
@@ -150,6 +154,14 @@ class SQLQueryTestSuite extends QueryTest with SharedSparkSession {
   private val notIncludedMsg = "[not included in comparison]"
   private val clsName = this.getClass.getCanonicalName
 
+  private val _codegenTime = new LongAccumulator
+  private val testTime = new java.util.concurrent.atomic.AtomicLong()
+  private val testTime2 = new java.util.concurrent.atomic.AtomicLong()
+  private val _codegenCompileTime = new LongAccumulator
+
+  def codegenTime: Long = _codegenTime.sum
+  def codegenCompileTime: Long = _codegenCompileTime.sum
+
   protected val emptySchema = StructType(Seq.empty).catalogString
 
   protected override def sparkConf: SparkConf = super.sparkConf
@@ -226,6 +238,7 @@ class SQLQueryTestSuite extends QueryTest with SharedSparkSession {
       name: String, inputFile: String, resultFile: String) extends TestCase with AnsiTest
 
   protected def createScalaTestCase(testCase: TestCase): Unit = {
+    logWarning(s"-------------${testCase.name}")
     if (blackList.exists(t =>
         testCase.name.toLowerCase(Locale.ROOT).contains(t.toLowerCase(Locale.ROOT)))) {
       // Create a test case to ignore this case.
@@ -247,6 +260,12 @@ class SQLQueryTestSuite extends QueryTest with SharedSparkSession {
         // Create a test case to run this case.
         test(testCase.name) {
           runTest(testCase)
+          val metricCodegenTime = CodegenMetrics.METRIC_CODE_GENERATE_TIME.getSnapshot.getValues.sum
+          val metricCompileTime = CodegenMetrics.METRIC_COMPILATION_TIME.getSnapshot.getValues.sum
+          _codegenTime.setValue(metricCodegenTime)
+          _codegenCompileTime.setValue(metricCompileTime)
+          testTime.addAndGet(metricCodegenTime)
+          testTime2.addAndGet(metricCompileTime)
         }
     }
   }
@@ -664,6 +683,17 @@ class SQLQueryTestSuite extends QueryTest with SharedSparkSession {
 
       // For debugging dump some statistics about how much time was spent in various optimizer rules
       logWarning(RuleExecutor.dumpTimeSpent())
+      val codegenInfo =
+        s"""
+           |=== Metrics of WholeCodegen ===
+           |Total code generates time: ${codegenTime / MILLIS_PER_SECOND} seconds
+           |Total code compiles time: ${codegenCompileTime / MILLIS_PER_SECOND} seconds
+         """.stripMargin
+      logWarning(codegenInfo)
+      logWarning(s"test time $testTime")
+      logWarning(s"test time 2 $testTime2")
+      logWarning(s"total compile time ${CodeGenerator.compileTime}")
+      logWarning(s"total compile time 2 ${CodeGenerator.compileTime2.sum}")
     } finally {
       super.afterAll()
     }

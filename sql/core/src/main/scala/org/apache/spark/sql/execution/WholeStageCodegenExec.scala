@@ -757,6 +757,7 @@ case class WholeStageCodegenExec(child: SparkPlan)(val codegenStageId: Int)
     }
     val endTime = System.nanoTime()
     def timeMs: Double = (endTime - startTime).toDouble / 1000000
+    logWarning(s"codegen time:$timeMs")
     CodegenMetrics.METRIC_CODE_GENERATE_TIME.update(timeMs.toLong)
     newRdd
   }
