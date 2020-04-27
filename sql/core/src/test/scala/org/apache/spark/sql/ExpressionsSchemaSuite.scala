@@ -133,8 +133,9 @@ class ExpressionsSchemaSuite extends QueryTest with SharedSparkSession {
       if (!ignoreSet.contains(className)) {
         kv._2.foreach { funInfo =>
           val example = funInfo.getExamples
+          val funcName = funInfo.getName.replaceAll("\\|", "&#124;")
           if (example == "") {
-            val queryOutput = QueryOutput(curNumber, className, funInfo.getName)
+            val queryOutput = QueryOutput(curNumber, className, funcName)
             outputBuffer += queryOutput.toString
             outputs += queryOutput
             missingExamples += queryOutput.funcName
@@ -149,8 +150,9 @@ class ExpressionsSchemaSuite extends QueryTest with SharedSparkSession {
             .filterNot(_.trim.startsWith("SET")).take(1).foreach(_ match {
               case exampleRe(sql, expected) =>
                 val df = spark.sql(sql)
-                val schema = df.schema.catalogString
-                val queryOutput = QueryOutput(curNumber, className, funInfo.getName, sql, schema)
+                val escapedSql = sql.replaceAll("\\|", "&#124;")
+                val schema = df.schema.catalogString.replaceAll("\\|", "&#124;")
+                val queryOutput = QueryOutput(curNumber, className, funcName, escapedSql, schema)
                 outputBuffer += queryOutput.toString
                 outputs += queryOutput
               case _ =>
@@ -189,25 +191,25 @@ class ExpressionsSchemaSuite extends QueryTest with SharedSparkSession {
 
       Seq.tabulate(outputs.size) { i =>
         val segments = lines(i + 7).split('|')
-        if (segments(2).trim == "org.apache.spark.sql.catalyst.expressions.BitwiseOr") {
+        // if (segments(2).trim == "org.apache.spark.sql.catalyst.expressions.BitwiseOr") {
           // scalastyle:off line.size.limit
           // The name of `BitwiseOr` is '|', so the line in golden file looks like below.
           // | 40 | org.apache.spark.sql.catalyst.expressions.BitwiseOr | | | SELECT 3 | 5 | struct<(3 | 5):int> |
-          QueryOutput(
-            className = segments(2).trim,
-            funcName = "|",
-            sql = (segments(5) + "|" + segments(6)).trim,
-            schema = (segments(7) + "|" + segments(8)).trim)
-        } else {
+          // QueryOutput(
+          //   className = segments(2).trim,
+          //  funcName = "|",
+          //  sql = (segments(5) + "|" + segments(6)).trim,
+          //  schema = (segments(7) + "|" + segments(8)).trim)
+        // } else {
           // The lines most expressions output to a file are in the following format
           // | 1 | org.apache.spark.sql.catalyst.expressions.Abs | abs | SELECT abs(-1) | struct<abs(-1):int> |
           // scalastyle:on line.size.limit
-          QueryOutput(
-            className = segments(2).trim,
-            funcName = segments(3).trim,
-            sql = segments(4).trim,
-            schema = segments(5).trim)
-        }
+        QueryOutput(
+          className = segments(2).trim,
+          funcName = segments(3).trim,
+          sql = segments(4).trim,
+          schema = segments(5).trim)
+        // }
       }
     }
 

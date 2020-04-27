@@ -44,7 +44,7 @@
 | 37 | org.apache.spark.sql.catalyst.expressions.BitwiseAnd | & | SELECT 3 & 5 | struct<(3 & 5):int> |
 | 38 | org.apache.spark.sql.catalyst.expressions.BitwiseCount | bit_count | SELECT bit_count(0) | struct<bit_count(0):int> |
 | 39 | org.apache.spark.sql.catalyst.expressions.BitwiseNot | ~ | SELECT ~ 0 | struct<~0:int> |
-| 40 | org.apache.spark.sql.catalyst.expressions.BitwiseOr | | | SELECT 3 | 5 | struct<(3 | 5):int> |
+| 40 | org.apache.spark.sql.catalyst.expressions.BitwiseOr | &#124; | SELECT 3 &#124; 5 | struct<(3 &#124; 5):int> |
 | 41 | org.apache.spark.sql.catalyst.expressions.BitwiseXor | ^ | SELECT 3 ^ 5 | struct<(3 ^ 5):int> |
 | 42 | org.apache.spark.sql.catalyst.expressions.CaseWhen | when | SELECT CASE WHEN 1 > 0 THEN 1 WHEN 2 > 0 THEN 2.0 ELSE 1.2 END | struct<CASE WHEN (1 > 0) THEN CAST(1 AS DECIMAL(11,1)) WHEN (2 > 0) THEN CAST(2.0 AS DECIMAL(11,1)) ELSE CAST(1.2 AS DECIMAL(11,1)) END:decimal(11,1)> |
 | 43 | org.apache.spark.sql.catalyst.expressions.Cast | string | Example is missing | Example is missing |
