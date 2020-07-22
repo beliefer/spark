@@ -17,7 +17,7 @@
 
 package org.apache.spark.sql.catalyst.optimizer
 
-import org.apache.spark.sql.catalyst.expressions.{Alias, AttributeReference, Expression, If, IsNotNull, Literal, NamedExpression}
+import org.apache.spark.sql.catalyst.expressions.{Alias, Attribute, AttributeReference, Expression, NamedExpression}
 import org.apache.spark.sql.catalyst.expressions.aggregate.{AggregateExpression, AggregateFunction}
 import org.apache.spark.sql.catalyst.plans.logical.{Aggregate, LogicalPlan, Project}
 import org.apache.spark.sql.catalyst.rules.Rule
@@ -149,16 +149,11 @@ object ProjectFilterInAggregates extends Rule[LogicalPlan] {
       val projectionMap = unfoldableChildren.map {
         case e =>
           currentExprId += 1
-          val ne = if (filter.isDefined) {
-            If(filter.get, e, Literal.create(null, e.dataType))
-          } else {
-            e
-          }
           // For convenience and unification, we always alias the column, even if
           // there is no filter.
-          e -> Alias(ne, s"_gen_attr_$currentExprId")()
+          e -> Alias(e, s"_gen_attr_$currentExprId")()
       }
-      val projection = projectionMap.map(_._2)
+      val projection = projectionMap.map(_._2) ++ ae.filterAttributes
       val exprAttrs = projectionMap.map { kv =>
         (kv._1, kv._2.toAttribute)
       }
@@ -169,7 +164,10 @@ object ProjectFilterInAggregates extends Rule[LogicalPlan] {
         //  When the filter execution result is false, the conditional expression will
         // output null, it will affect the results of those aggregate functions not
         // ignore nulls (e.g. count). So we add a new filter with IsNotNull.
-        ae.copy(aggregateFunction = raf, filter = Some(IsNotNull(newChildren.last)))
+        val filterOpt = filter.map(_.transform {
+          case a: Attribute => exprAttrLookup.getOrElse(a, a)
+        })
+        ae.copy(aggregateFunction = raf, filter = filterOpt)
       } else {
         ae.copy(aggregateFunction = raf, filter = None)
       }

@@ -204,7 +204,11 @@ object RewriteDistinctAggregates extends Rule[LogicalPlan] {
       }
 
       // Setup unique distinct aggregate children.
-      val distinctAggChildren = distinctAggGroups.keySet.flatten.toSeq.distinct
+      val distinctAggExprs = aggExpressions
+        .filter(e => e.isDistinct && e.children.exists(!_.foldable))
+      val distinctAggFilterAttrs = distinctAggExprs.flatMap(_.filterAttributes)
+      val distinctAggChildren = (distinctAggGroups.keySet.flatten.toSeq ++ distinctAggFilterAttrs)
+        .distinct
       val distinctAggChildAttrMap = distinctAggChildren.map(expressionAttributePair)
       val distinctAggChildAttrs = distinctAggChildAttrMap.map(_._2)
 
@@ -214,9 +218,13 @@ object RewriteDistinctAggregates extends Rule[LogicalPlan] {
         case ((group, expressions), i) =>
           val id = Literal(i + 1)
 
+          val filterAttributes = expressions.flatMap { e =>
+            e.filterAttributes
+          }
           // Expand projection
           val projection = distinctAggChildren.map {
             case e if group.contains(e) => e
+            case e if filterAttributes.contains(e) => e
             case e => nullify(e)
           } :+ id
 
