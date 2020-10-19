@@ -24,6 +24,7 @@ import scala.collection.mutable.ArrayBuffer
 
 import org.apache.commons.text.StringEscapeUtils
 
+import org.apache.spark.sql.catalyst.InternalRow
 import org.apache.spark.sql.catalyst.expressions.codegen._
 import org.apache.spark.sql.catalyst.expressions.codegen.Block._
 import org.apache.spark.sql.catalyst.util.{GenericArrayData, StringUtils}
@@ -255,6 +256,144 @@ case class RLike(left: Expression, right: Expression) extends StringRegexExpress
   }
 }
 
+abstract class LikeAnyBase extends Expression with ImplicitCastInputTypes with NullIntolerant {
+  def value: Expression = children.head
+  def list: Seq[Expression] = children.tail
+  protected def isNot: Boolean
+
+  override def inputTypes: Seq[AbstractDataType] = {
+    StringType +: Seq.fill(children.size - 1)(StringType)
+  }
+
+  override def dataType: DataType = BooleanType
+
+  override def foldable: Boolean = children.forall(_.foldable)
+
+  override def nullable: Boolean = true
+
+  private def escape(v: String): String = StringUtils.escapeLikeRegex(v, '\\')
+
+  private def matches(regex: Pattern, str: String): Boolean = regex.matcher(str).matches()
+
+  override def eval(input: InternalRow): Any = {
+    val evaluatedValue = value.eval(input)
+    if (evaluatedValue == null) {
+      null
+    } else {
+      var hasNull = false
+      var hasMatched = false
+      list.foreach { e =>
+        if (!hasNull && !hasMatched) {
+          val str = e.eval(input)
+          if (str == null) {
+            hasNull = true
+          } else {
+            val regex = Pattern.compile(escape(str.asInstanceOf[UTF8String].toString))
+            val matched = matches(regex, evaluatedValue.asInstanceOf[UTF8String].toString)
+            if ((isNot && !matched) || (!isNot && matched)) {
+              hasMatched = true
+            }
+          }
+        }
+      }
+      if (hasNull) {
+        null
+      } else {
+        hasMatched
+      }
+    }
+  }
+
+  override def doGenCode(ctx: CodegenContext, ev: ExprCode): ExprCode = {
+    val patternClass = classOf[Pattern].getName
+    val escapeFunc = StringUtils.getClass.getName.stripSuffix("$") + ".escapeLikeRegex"
+    val javaDataType = CodeGenerator.javaType(value.dataType)
+    val valueGen = value.genCode(ctx)
+    val listGen = list.map(_.genCode(ctx))
+    val pattern = ctx.freshName("pattern")
+    val rightStr = ctx.freshName("rightStr")
+    val escapedEscapeChar = StringEscapeUtils.escapeJava("\\")
+    val hasNull = ctx.freshName("hasNull")
+    val hasMatched = ctx.freshName("hasMatched")
+    val valueArg = ctx.freshName("valueArg")
+    val patternCache = ctx.freshName("patternCache")
+    // If some regex expression is foldable, we don't want to re-evaluate the pattern again.
+    val cacheCode = list.zipWithIndex.collect { case (x, i) if x.foldable =>
+      val xVal = x.eval()
+      if (xVal != null) {
+        val regex = StringEscapeUtils.escapeJava(escape(xVal.asInstanceOf[UTF8String].toString()))
+        s"""$patternCache[$i] = $patternClass.compile("$regex");"""
+      } else {
+        s"""$patternCache[$i] = null;"""
+      }
+    }.mkString("\n")
+
+    val listCode = listGen.zipWithIndex.map { case (x, i) =>
+      s"""
+         |${x.code}
+         |if (${x.isNull}) {
+         |  $hasNull = true; // ${ev.isNull} = true;
+         |} else if (!$hasNull && !$hasMatched) {
+         |  $patternClass $pattern = $patternCache[$i];
+         |  if ($pattern == null) {
+         |    String $rightStr = ${x.value}.toString();
+         |    $pattern = $patternClass.compile($escapeFunc($rightStr, '$escapedEscapeChar'));
+         |  }
+         |  if ($isNot && !$pattern.matcher($valueArg.toString()).matches()) {
+         |    $hasMatched = true;
+         |  } else if (!$isNot && $pattern.matcher($valueArg.toString()).matches()) {
+         |    $hasMatched = true;
+         |  }
+         |}
+       """.stripMargin
+    }
+
+    val resultType = CodeGenerator.javaType(dataType)
+    val codes = ctx.splitExpressionsWithCurrentInputs(
+      expressions = listCode,
+      funcName = "likeAny",
+      extraArguments = (javaDataType, valueArg) :: (CodeGenerator.JAVA_BOOLEAN, hasNull) ::
+        (resultType, hasMatched) :: Nil,
+      returnType = resultType,
+      makeSplitFunction = body =>
+        s"""
+           |if (!$hasNull && !$hasMatched) {
+           |  $body;
+           |}
+         """.stripMargin,
+      foldFunctions = _.map { funcCall =>
+        s"""
+           |if (!$hasNull && !$hasMatched) {
+           |  $funcCall;
+           |}
+         """.stripMargin
+      }.mkString("\n"))
+    ev.copy(code =
+      code"""
+            |${valueGen.code}
+            |$patternClass[] $patternCache = new $patternClass[${list.length}];
+            |$cacheCode
+            |boolean $hasNull = false;
+            |boolean $hasMatched = false;
+            |if (${valueGen.isNull}) {
+            |  $hasNull = true;
+            |} else {
+            |  $javaDataType $valueArg = ${valueGen.value};
+            |  $codes
+            |}
+            |final boolean ${ev.isNull} = $hasNull;
+            |final boolean ${ev.value} = $hasMatched;
+      """.stripMargin)
+  }
+}
+
+case class LikeAny(children: Seq[Expression]) extends LikeAnyBase {
+  override def isNot: Boolean = false
+}
+
+case class NotLikeAny(children: Seq[Expression]) extends LikeAnyBase {
+  override def isNot: Boolean = true
+}
 
 /**
  * Splits str around matches of the given regex.

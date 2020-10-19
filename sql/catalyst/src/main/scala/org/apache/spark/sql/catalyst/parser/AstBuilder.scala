@@ -1406,7 +1406,19 @@ class AstBuilder(conf: SQLConf) extends SqlBaseBaseVisitor[AnyRef] with Logging 
       case SqlBaseParser.LIKE =>
         Option(ctx.quantifier).map(_.getType) match {
           case Some(SqlBaseParser.ANY) | Some(SqlBaseParser.SOME) =>
-            getLikeQuantifierExprs(ctx.expression).reduceLeft(Or)
+            if (ctx.expression.isEmpty) {
+              throw new ParseException("Expected something between '(' and ')'.", ctx)
+            } else if (ctx.expression.size < 500) {
+              // An empirical value that will not cause StackOverflowError is used here
+              getLikeQuantifierExprs(ctx.expression).reduceLeft(And)
+            } else {
+              // If there are many pattern expressions, will throw StackOverflowError.
+              // So we use LikeAll or NotLikeAll instead.
+              ctx.NOT match {
+                case null => LikeAny(e +: ctx.expression.asScala.map(expression))
+                case _ => NotLikeAny(e +: ctx.expression.asScala.map(expression))
+              }
+            }
           case Some(SqlBaseParser.ALL) =>
             getLikeQuantifierExprs(ctx.expression).reduceLeft(And)
           case _ =>
