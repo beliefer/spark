@@ -318,15 +318,15 @@ abstract class LikeAnyBase extends Expression with ImplicitCastInputTypes with N
     val valueArg = ctx.freshName("valueArg")
     val patternCache = ctx.freshName("patternCache")
     // If some regex expression is foldable, we don't want to re-evaluate the pattern again.
-    val cacheCode = list.zipWithIndex.collect { case (x, i) if x.foldable =>
-      val xVal = x.eval()
-      if (xVal != null) {
-        val regex = StringEscapeUtils.escapeJava(escape(xVal.asInstanceOf[UTF8String].toString()))
+    val evalList = list.filter(_.foldable).map(_.eval())
+    val cacheCode = if (evalList.exists(_ == null)) {
+      s"$hasNull = true;"
+    } else {
+      evalList.zipWithIndex.collect { case (x, i) =>
+        val regex = StringEscapeUtils.escapeJava(escape(x.asInstanceOf[UTF8String].toString()))
         s"""$patternCache[$i] = $patternClass.compile("$regex");"""
-      } else {
-        s"""$patternCache[$i] = null;"""
-      }
-    }.mkString("\n")
+      }.mkString("\n")
+    }
 
     val listCode = listGen.zipWithIndex.map { case (x, i) =>
       s"""
