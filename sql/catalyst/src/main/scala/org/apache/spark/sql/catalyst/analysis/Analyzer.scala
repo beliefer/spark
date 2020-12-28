@@ -2135,7 +2135,7 @@ class Analyzer(override val catalogManager: CatalogManager)
                 case other if (isDistinct || filter.isDefined) =>
                   throw QueryCompilationErrors.distinctOrFilterOnlyWithAggregateFunctionError(
                     other.prettyName)
-                case e: String2TrimExpression if arguments.size == 2 =>
+                case e: TrimExpression if arguments.size == 2 =>
                   if (trimWarningEnabled.get) {
                     log.warn("Two-parameter TRIM/LTRIM/RTRIM function signatures are deprecated." +
                       " Use SQL syntax `TRIM((BOTH | LEADING | TRAILING)? trimStr FROM str)`" +
