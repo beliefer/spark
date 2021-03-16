@@ -322,4 +322,10 @@ object QueryExecutionErrors {
   def compilerError(e: CompileException): Throwable = {
     new CompileException(failedToCompileMsg(e), e.getLocation)
   }
+
+  def invalidNumberFormatError(format: String): Throwable = {
+    new IllegalArgumentException(
+      s"Format '$format' used for parsing string to number or " +
+        "formatting number to string is invalid")
+  }
 }
