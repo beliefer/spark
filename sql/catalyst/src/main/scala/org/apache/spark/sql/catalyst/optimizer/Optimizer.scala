@@ -112,12 +112,14 @@ abstract class Optimizer(catalogManager: CatalogManager)
         RewriteCorrelatedScalarSubquery,
         EliminateSerialization,
         RemoveRedundantAliases,
+        RemoveRedundantAggregates,
         UnwrapCastInBinaryComparison,
         RemoveNoopOperators,
         OptimizeUpdateFields,
         SimplifyExtractValueOps,
         OptimizeCsvJsonExprs,
-        CombineConcats) ++
+        CombineConcats,
+        UpdateGroupingExprRefNullability) ++
         extendedOperatorOptimizationRules
 
     val operatorOptimizationBatch: Seq[Batch] = {
@@ -146,6 +148,7 @@ abstract class Optimizer(catalogManager: CatalogManager)
       EliminateView,
       ReplaceExpressions,
       RewriteNonCorrelatedExists,
+      EnforceGroupingReferencesInAggregates,
       ComputeCurrentTime,
       GetCurrentDatabaseAndCatalog(catalogManager)) ::
     //////////////////////////////////////////////////////////////////////////////////////////
@@ -265,7 +268,9 @@ abstract class Optimizer(catalogManager: CatalogManager)
       RewriteCorrelatedScalarSubquery.ruleName ::
       RewritePredicateSubquery.ruleName ::
       NormalizeFloatingNumbers.ruleName ::
-      ReplaceUpdateFieldsExpression.ruleName :: Nil
+      ReplaceUpdateFieldsExpression.ruleName ::
+      EnforceGroupingReferencesInAggregates.ruleName ::
+      UpdateGroupingExprRefNullability.ruleName :: Nil
 
   /**
    * Optimize all the subqueries inside expression.
@@ -399,7 +404,7 @@ object SimpleTestOptimizer extends SimpleTestOptimizer
 class SimpleTestOptimizer extends Optimizer(
   new CatalogManager(
     FakeV2SessionCatalog,
-    new SessionCatalog(new InMemoryCatalog, EmptyFunctionRegistry)))
+    new SessionCatalog(new InMemoryCatalog, EmptyFunctionRegistry, EmptyTableFunctionRegistry)))
 
 /**
  * Remove redundant aliases from a query plan. A redundant alias is an alias that does not change
@@ -497,6 +502,46 @@ object RemoveRedundantAliases extends Rule[LogicalPlan] {
 }
 
 /**
+ * Remove redundant aggregates from a query plan. A redundant aggregate is an aggregate whose
+ * only goal is to keep distinct values, while its parent aggregate would ignore duplicate values.
+ */
+object RemoveRedundantAggregates extends Rule[LogicalPlan] with AliasHelper {
+  def apply(plan: LogicalPlan): LogicalPlan = plan transformUp {
+    case upper @ Aggregate(_, _, lower: Aggregate) if lowerIsRedundant(upper, lower) =>
+      val aliasMap = getAliasMap(lower)
+
+      val newAggregate = Aggregate.withGroupingRefs(
+        child = lower.child,
+        groupingExpressions = upper.groupingExpressions.map(replaceAlias(_, aliasMap)),
+        aggregateExpressions = upper.aggregateExpressions.map(
+          replaceAliasButKeepName(_, aliasMap))
+      )
+
+      // We might have introduces non-deterministic grouping expression
+      if (newAggregate.groupingExpressions.exists(!_.deterministic)) {
+        PullOutNondeterministic.applyLocally.applyOrElse(newAggregate, identity[LogicalPlan])
+      } else {
+        newAggregate
+      }
+  }
+
+  private def lowerIsRedundant(upper: Aggregate, lower: Aggregate): Boolean = {
+    val upperHasNoAggregateExpressions =
+      !upper.aggregateExpressions.exists(AggregateExpression.containsAggregate)
+
+    lazy val upperRefsOnlyDeterministicNonAgg = upper.references.subsetOf(AttributeSet(
+      lower
+        .aggregateExpressions
+        .filter(_.deterministic)
+        .filterNot(AggregateExpression.containsAggregate)
+        .map(_.toAttribute)
+    ))
+
+    upperHasNoAggregateExpressions && upperRefsOnlyDeterministicNonAgg
+  }
+}
+
+/**
  * Remove no-op operators from the query plan that do not make any modifications.
  */
 object RemoveNoopOperators extends Rule[LogicalPlan] {
@@ -589,6 +634,20 @@ object LimitPushDown extends Rule[LogicalPlan] {
     }
   }
 
+  private def pushLocalLimitThroughJoin(limitExpr: Expression, join: Join): Join = {
+    join.joinType match {
+      case RightOuter => join.copy(right = maybePushLocalLimit(limitExpr, join.right))
+      case LeftOuter => join.copy(left = maybePushLocalLimit(limitExpr, join.left))
+      case _: InnerLike if join.condition.isEmpty =>
+        join.copy(
+          left = maybePushLocalLimit(limitExpr, join.left),
+          right = maybePushLocalLimit(limitExpr, join.right))
+      case LeftSemi | LeftAnti if join.condition.isEmpty =>
+        join.copy(left = maybePushLocalLimit(limitExpr, join.left))
+      case _ => join
+    }
+  }
+
   def apply(plan: LogicalPlan): LogicalPlan = plan transform {
     // Adding extra Limits below UNION ALL for children which are not Limit or do not have Limit
     // descendants whose maxRow is larger. This heuristic is valid assuming there does not exist any
@@ -598,6 +657,7 @@ object LimitPushDown extends Rule[LogicalPlan] {
     // pushdown Limit.
     case LocalLimit(exp, u: Union) =>
       LocalLimit(exp, u.copy(children = u.children.map(maybePushLocalLimit(exp, _))))
+
     // Add extra limits below JOIN:
     // 1. For LEFT OUTER and RIGHT OUTER JOIN, we push limits to the left and right sides,
     //    respectively.
@@ -610,19 +670,11 @@ object LimitPushDown extends Rule[LogicalPlan] {
     // introduce limits on both sides if it is applied multiple times. Therefore:
     //   - If one side is already limited, stack another limit on top if the new limit is smaller.
     //     The redundant limit will be collapsed by the CombineLimits rule.
-    case LocalLimit(exp, join @ Join(left, right, joinType, conditionOpt, _)) =>
-      val newJoin = joinType match {
-        case RightOuter => join.copy(right = maybePushLocalLimit(exp, right))
-        case LeftOuter => join.copy(left = maybePushLocalLimit(exp, left))
-        case _: InnerLike if conditionOpt.isEmpty =>
-          join.copy(
-            left = maybePushLocalLimit(exp, left),
-            right = maybePushLocalLimit(exp, right))
-        case LeftSemi | LeftAnti if conditionOpt.isEmpty =>
-          join.copy(left = maybePushLocalLimit(exp, left))
-        case _ => join
-      }
-      LocalLimit(exp, newJoin)
+    case LocalLimit(exp, join: Join) =>
+      LocalLimit(exp, pushLocalLimitThroughJoin(exp, join))
+    // There is a Project between LocalLimit and Join if they do not have the same output.
+    case LocalLimit(exp, project @ Project(_, join: Join)) =>
+      LocalLimit(exp, project.copy(child = pushLocalLimitThroughJoin(exp, join)))
   }
 }
 
@@ -1004,7 +1056,7 @@ object InferFiltersFromConstraints extends Rule[LogicalPlan]
   with PredicateHelper with ConstraintHelper {
 
   def apply(plan: LogicalPlan): LogicalPlan = {
-    if (SQLConf.get.constraintPropagationEnabled) {
+    if (conf.constraintPropagationEnabled) {
       inferFilters(plan)
     } else {
       plan
@@ -1613,7 +1665,7 @@ object CheckCartesianProducts extends Rule[LogicalPlan] with PredicateHelper {
   }
 
   def apply(plan: LogicalPlan): LogicalPlan =
-    if (SQLConf.get.crossJoinEnabled) {
+    if (conf.crossJoinEnabled) {
       plan
     } else plan transform {
       case j @ Join(left, right, Inner | LeftOuter | RightOuter | FullOuter, _, _)
@@ -1655,7 +1707,7 @@ object DecimalAggregates extends Rule[LogicalPlan] {
             we.copy(windowFunction = ae.copy(aggregateFunction = Average(UnscaledValue(e))))
           Cast(
             Divide(newAggExpr, Literal.create(math.pow(10.0, scale), DoubleType)),
-            DecimalType(prec + 4, scale + 4), Option(SQLConf.get.sessionLocalTimeZone))
+            DecimalType(prec + 4, scale + 4), Option(conf.sessionLocalTimeZone))
 
         case _ => we
       }
@@ -1667,7 +1719,7 @@ object DecimalAggregates extends Rule[LogicalPlan] {
           val newAggExpr = ae.copy(aggregateFunction = Average(UnscaledValue(e)))
           Cast(
             Divide(newAggExpr, Literal.create(math.pow(10.0, scale), DoubleType)),
-            DecimalType(prec + 4, scale + 4), Option(SQLConf.get.sessionLocalTimeZone))
+            DecimalType(prec + 4, scale + 4), Option(conf.sessionLocalTimeZone))
 
         case _ => ae
       }
@@ -1927,7 +1979,18 @@ object RemoveLiteralFromGroupExpressions extends Rule[LogicalPlan] {
     case a @ Aggregate(grouping, _, _) if grouping.nonEmpty =>
       val newGrouping = grouping.filter(!_.foldable)
       if (newGrouping.nonEmpty) {
-        a.copy(groupingExpressions = newGrouping)
+        val droppedGroupsBefore =
+          grouping.scanLeft(0)((n, e) => n + (if (e.foldable) 1 else 0)).toArray
+
+        val newAggregateExpressions =
+          a.aggregateExpressions.map(_.transform {
+            case g: GroupingExprRef if droppedGroupsBefore(g.ordinal) > 0 =>
+              g.copy(ordinal = g.ordinal - droppedGroupsBefore(g.ordinal))
+          }.asInstanceOf[NamedExpression])
+
+        a.copy(
+          groupingExpressions = newGrouping,
+          aggregateExpressions = newAggregateExpressions)
       } else {
         // All grouping expressions are literals. We should not drop them all, because this can
         // change the return semantics when the input of the Aggregate is empty (SPARK-17114). We
@@ -1948,7 +2011,25 @@ object RemoveRepetitionFromGroupExpressions extends Rule[LogicalPlan] {
       if (newGrouping.size == grouping.size) {
         a
       } else {
-        a.copy(groupingExpressions = newGrouping)
+        var i = 0
+        val droppedGroupsBefore = grouping.scanLeft(0)((n, e) =>
+          n + (if (i >= newGrouping.size || e.eq(newGrouping(i))) {
+            i += 1
+            0
+          } else {
+            1
+          })
+        ).toArray
+
+        val newAggregateExpressions =
+          a.aggregateExpressions.map(_.transform {
+            case g: GroupingExprRef if droppedGroupsBefore(g.ordinal) > 0 =>
+              g.copy(ordinal = g.ordinal - droppedGroupsBefore(g.ordinal))
+          }.asInstanceOf[NamedExpression])
+
+        a.copy(
+          groupingExpressions = newGrouping,
+          aggregateExpressions = newAggregateExpressions)
       }
   }
 }
