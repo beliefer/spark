@@ -186,8 +186,8 @@ private[hive] class HiveClientImpl(
       Hive.set(clientLoader.cachedHive.asInstanceOf[Hive])
     }
     // Hive 2.3 will set UDFClassLoader to hiveConf when initializing SessionState
-    // since HIVE-11878, and ADDJarCommand will add jars to clientLoader.classLoader.
-    // For this reason we cannot load the jars added by ADDJarCommand because of class loader
+    // since HIVE-11878, and ADDJarsCommand will add jars to clientLoader.classLoader.
+    // For this reason we cannot load the jars added by ADDJarsCommand because of class loader
     // got changed. We reset it to clientLoader.ClassLoader here.
     state.getConf.setClassLoader(clientLoader.classLoader)
     SessionState.start(state)
@@ -273,7 +273,7 @@ private[hive] class HiveClientImpl(
     if (clientLoader.cachedHive != null) {
       clientLoader.cachedHive.asInstanceOf[Hive]
     } else {
-      val c = Hive.get(conf)
+      val c = shim.getHive(conf)
       clientLoader.cachedHive = c
       c
     }
@@ -303,7 +303,7 @@ private[hive] class HiveClientImpl(
     // with the side-effect of Hive.get(conf) to avoid using out-of-date HiveConf.
     // See discussion in https://github.com/apache/spark/pull/16826/files#r104606859
     // for more details.
-    Hive.get(conf)
+    shim.getHive(conf)
     // setCurrentSessionState will use the classLoader associated
     // with the HiveConf in `state` to override the context class loader of the current
     // thread.
