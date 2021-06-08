@@ -22,15 +22,14 @@ import java.util.regex.{Pattern, PatternSyntaxException}
 import scala.collection.mutable.ArrayBuffer
 
 import org.apache.spark.internal.Logging
-import org.apache.spark.sql.AnalysisException
+import org.apache.spark.sql.errors.QueryCompilationErrors
 import org.apache.spark.sql.internal.SQLConf
 import org.apache.spark.unsafe.array.ByteArrayMethods
 import org.apache.spark.unsafe.types.UTF8String
 
 object StringUtils extends Logging {
 
-  private def fail(pattern: String, message: String) = throw new AnalysisException(
-    s"the pattern '$pattern' is invalid, $message")
+  def fail(message: String) = throw QueryCompilationErrors.invalidPatternError(pattern, message)
 
   /**
    * Validate and convert SQL 'like' pattern to a Java regular expression.
@@ -55,10 +54,10 @@ object StringUtils extends Logging {
           c match {
             case '_' | '%' => out ++= Pattern.quote(Character.toString(c))
             case c if c == escapeChar => out ++= Pattern.quote(Character.toString(c))
-            case _ => fail(pattern, s"the escape character is not allowed to precede '$c'")
+            case _ => fail(s"the escape character is not allowed to precede '$c'")
           }
         case c if c == escapeChar =>
-          fail(pattern, "it is not allowed to end with the escape character")
+          fail("it is not allowed to end with the escape character")
         case '_' => out ++= "."
         case '%' => out ++= ".*"
         case c => out ++= Pattern.quote(Character.toString(c))
@@ -97,10 +96,10 @@ object StringUtils extends Logging {
             // Avoid convert the characters of Java regular expression to quote literal.
             case 'w' | 'W' | 's' | 'S' | 'd' | 'D' | 'b' | 'B' | 'n' | 'r' | 't' | 'f' | 'v' =>
               out ++= s"\\$c"
-            case _ => fail(pattern, s"the escape character is not allowed to precede '$c'")
+            case _ => fail(s"the escape character is not allowed to precede '$c'")
           }
         case c if c == escapeChar =>
-          fail(pattern, "it is not allowed to end with the escape character")
+          fail("it is not allowed to end with the escape character")
         case '_' => out ++= "."
         case '%' => out ++= ".*"
         // If '\' is not the escape character, need convert to literal.

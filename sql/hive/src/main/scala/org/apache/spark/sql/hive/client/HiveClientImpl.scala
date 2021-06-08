@@ -190,7 +190,7 @@ private[hive] class HiveClientImpl(
     // For this reason we cannot load the jars added by ADDJarsCommand because of class loader
     // got changed. We reset it to clientLoader.ClassLoader here.
     state.getConf.setClassLoader(clientLoader.classLoader)
-    SessionState.start(state)
+    shim.setCurrentSessionState(state)
     state.out = new PrintStream(outputBuffer, true, UTF_8.name())
     state.err = new PrintStream(outputBuffer, true, UTF_8.name())
     state
@@ -273,7 +273,7 @@ private[hive] class HiveClientImpl(
     if (clientLoader.cachedHive != null) {
       clientLoader.cachedHive.asInstanceOf[Hive]
     } else {
-      val c = shim.getHive(conf)
+      val c = Hive.get(conf)
       clientLoader.cachedHive = c
       c
     }
@@ -303,7 +303,7 @@ private[hive] class HiveClientImpl(
     // with the side-effect of Hive.get(conf) to avoid using out-of-date HiveConf.
     // See discussion in https://github.com/apache/spark/pull/16826/files#r104606859
     // for more details.
-    shim.getHive(conf)
+    Hive.get(conf)
     // setCurrentSessionState will use the classLoader associated
     // with the HiveConf in `state` to override the context class loader of the current
     // thread.
@@ -765,10 +765,9 @@ private[hive] class HiveClientImpl(
 
   override def getPartitionsByFilter(
       table: CatalogTable,
-      predicates: Seq[Expression],
-      timeZoneId: String): Seq[CatalogTablePartition] = withHiveState {
+      predicates: Seq[Expression]): Seq[CatalogTablePartition] = withHiveState {
     val hiveTable = toHiveTable(table, Some(userName))
-    val parts = shim.getPartitionsByFilter(client, hiveTable, predicates, timeZoneId)
+    val parts = shim.getPartitionsByFilter(client, hiveTable, predicates)
       .map(fromHivePartition)
     HiveCatalogMetrics.incrementFetchedPartitions(parts.length)
     parts
@@ -828,6 +827,8 @@ private[hive] class HiveClientImpl(
       }
     }
 
+    // Hive query needs to start SessionState.
+    SessionState.start(state)
     logDebug(s"Running hiveql '$cmd'")
     if (cmd.toLowerCase(Locale.ROOT).startsWith("set")) { logDebug(s"Changing config: $cmd") }
     try {
