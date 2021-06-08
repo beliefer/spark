@@ -29,7 +29,8 @@ import org.apache.spark.unsafe.types.UTF8String
 
 object StringUtils extends Logging {
 
-  def fail(message: String) = throw QueryCompilationErrors.invalidPatternError(pattern, message)
+  def fail(pattern: String, message: String) =
+    throw QueryCompilationErrors.invalidPatternError(pattern, message)
 
   /**
    * Validate and convert SQL 'like' pattern to a Java regular expression.
@@ -54,10 +55,10 @@ object StringUtils extends Logging {
           c match {
             case '_' | '%' => out ++= Pattern.quote(Character.toString(c))
             case c if c == escapeChar => out ++= Pattern.quote(Character.toString(c))
-            case _ => fail(s"the escape character is not allowed to precede '$c'")
+            case _ => fail(pattern, s"the escape character is not allowed to precede '$c'")
           }
         case c if c == escapeChar =>
-          fail("it is not allowed to end with the escape character")
+          fail(pattern, "it is not allowed to end with the escape character")
         case '_' => out ++= "."
         case '%' => out ++= ".*"
         case c => out ++= Pattern.quote(Character.toString(c))
@@ -96,10 +97,10 @@ object StringUtils extends Logging {
             // Avoid convert the characters of Java regular expression to quote literal.
             case 'w' | 'W' | 's' | 'S' | 'd' | 'D' | 'b' | 'B' | 'n' | 'r' | 't' | 'f' | 'v' =>
               out ++= s"\\$c"
-            case _ => fail(s"the escape character is not allowed to precede '$c'")
+            case _ => fail(pattern, s"the escape character is not allowed to precede '$c'")
           }
         case c if c == escapeChar =>
-          fail("it is not allowed to end with the escape character")
+          fail(pattern, "it is not allowed to end with the escape character")
         case '_' => out ++= "."
         case '%' => out ++= ".*"
         // If '\' is not the escape character, need convert to literal.
