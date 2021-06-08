@@ -29,7 +29,7 @@ import org.apache.spark.unsafe.types.UTF8String
 
 object StringUtils extends Logging {
 
-  def fail(pattern: String, message: String) =
+  private def fail(pattern: String, message: String) =
     throw QueryCompilationErrors.invalidPatternError(pattern, message)
 
   /**
