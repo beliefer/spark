@@ -33,19 +33,19 @@ import org.apache.hadoop.hive.metastore.TableType
 import org.apache.hadoop.hive.metastore.api.{Database, EnvironmentContext, Function => HiveFunction, FunctionType, MetaException, PrincipalType, ResourceType, ResourceUri}
 import org.apache.hadoop.hive.ql.Driver
 import org.apache.hadoop.hive.ql.io.AcidUtils
-import org.apache.hadoop.hive.ql.metadata.{Hive, HiveException, Partition, Table}
+import org.apache.hadoop.hive.ql.metadata.{Hive, Partition, Table}
 import org.apache.hadoop.hive.ql.plan.AddPartitionDesc
 import org.apache.hadoop.hive.ql.processors.{CommandProcessor, CommandProcessorFactory}
 import org.apache.hadoop.hive.ql.session.SessionState
 import org.apache.hadoop.hive.serde.serdeConstants
 
 import org.apache.spark.internal.Logging
-import org.apache.spark.sql.AnalysisException
 import org.apache.spark.sql.catalyst.FunctionIdentifier
 import org.apache.spark.sql.catalyst.analysis.NoSuchPermanentFunctionException
 import org.apache.spark.sql.catalyst.catalog.{CatalogFunction, CatalogTablePartition, CatalogUtils, FunctionResource, FunctionResourceType}
 import org.apache.spark.sql.catalyst.expressions._
-import org.apache.spark.sql.catalyst.util.{DateFormatter, DateTimeUtils, TypeUtils}
+import org.apache.spark.sql.catalyst.util.{DateFormatter, TypeUtils}
+import org.apache.spark.sql.errors.{QueryCompilationErrors, QueryExecutionErrors}
 import org.apache.spark.sql.internal.SQLConf
 import org.apache.spark.sql.types.{AtomicType, DateType, IntegralType, StringType}
 import org.apache.spark.unsafe.types.UTF8String
@@ -82,8 +82,7 @@ private[client] sealed abstract class Shim {
   def getPartitionsByFilter(
       hive: Hive,
       table: Table,
-      predicates: Seq[Expression],
-      timeZoneId: String): Seq[Partition]
+      predicates: Seq[Expression]): Seq[Partition]
 
   def getCommandProcessor(token: String, conf: HiveConf): CommandProcessor
 
@@ -177,8 +176,6 @@ private[client] sealed abstract class Shim {
 
   def getMSC(hive: Hive): IMetaStoreClient
 
-  def getHive(hiveConf: HiveConf): Hive
-
   protected def findMethod(klass: Class[_], name: String, args: Class[_]*): Method = {
     klass.getMethod(name, args: _*)
   }
@@ -200,8 +197,6 @@ private[client] class Shim_v0_12 extends Shim with Logging {
   override def getMSC(hive: Hive): IMetaStoreClient = {
     getMSCMethod.invoke(hive).asInstanceOf[IMetaStoreClient]
   }
-
-  override def getHive(hiveConf: HiveConf): Hive = Hive.get(hiveConf)
 
   private lazy val startMethod =
     findStaticMethod(
@@ -330,7 +325,7 @@ private[client] class Shim_v0_12 extends Shim with Logging {
         // Ignore this partition since it already exists and ignoreIfExists == true
       } else {
         if (location == null && table.isView()) {
-          throw new HiveException("LOCATION clause illegal for view partition");
+          throw QueryExecutionErrors.illegalLocationClauseForViewPartitionError()
         }
 
         createPartitionMethod.invoke(
@@ -357,8 +352,7 @@ private[client] class Shim_v0_12 extends Shim with Logging {
   override def getPartitionsByFilter(
       hive: Hive,
       table: Table,
-      predicates: Seq[Expression],
-      timeZoneId: String): Seq[Partition] = {
+      predicates: Seq[Expression]): Seq[Partition] = {
     // getPartitionsByFilter() doesn't support binary comparison ops in Hive 0.12.
     // See HIVE-4888.
     logDebug("Hive 0.12 doesn't support predicate pushdown to metastore. " +
@@ -384,8 +378,7 @@ private[client] class Shim_v0_12 extends Shim with Logging {
       dbName: String,
       pattern: String,
       tableType: TableType): Seq[String] = {
-    throw new UnsupportedOperationException("Hive 2.2 and lower versions don't support " +
-      "getTablesByType. Please use Hive 2.3 or higher version.")
+    throw QueryExecutionErrors.getTablesByTypeUnsupportedByHiveVersionError()
   }
 
   override def loadPartition(
@@ -434,7 +427,7 @@ private[client] class Shim_v0_12 extends Shim with Logging {
       ignoreIfNotExists: Boolean,
       purge: Boolean): Unit = {
     if (purge) {
-      throw new UnsupportedOperationException("DROP TABLE ... PURGE")
+      throw QueryExecutionErrors.dropTableWithPurgeUnsupportedError()
     }
     hive.dropTable(dbName, tableName, deleteData, ignoreIfNotExists)
   }
@@ -455,14 +448,13 @@ private[client] class Shim_v0_12 extends Shim with Logging {
       deleteData: Boolean,
       purge: Boolean): Unit = {
     if (purge) {
-      throw new UnsupportedOperationException("ALTER TABLE ... DROP PARTITION ... PURGE")
+      throw QueryExecutionErrors.alterTableWithDropPartitionAndPurgeUnsupportedError()
     }
     hive.dropPartition(dbName, tableName, part, deleteData)
   }
 
   override def createFunction(hive: Hive, db: String, func: CatalogFunction): Unit = {
-    throw new AnalysisException("Hive 0.12 doesn't support creating permanent functions. " +
-      "Please use Hive 0.13 or higher.")
+    throw QueryCompilationErrors.hiveCreatePermanentFunctionsUnsupportedError()
   }
 
   def dropFunction(hive: Hive, db: String, name: String): Unit = {
@@ -605,7 +597,7 @@ private[client] class Shim_v0_13 extends Shim_v0_12 {
         case ResourceType.ARCHIVE => "archive"
         case ResourceType.FILE => "file"
         case ResourceType.JAR => "jar"
-        case r => throw new AnalysisException(s"Unknown resource type: $r")
+        case r => throw QueryCompilationErrors.unknownHiveResourceTypeError(r.toString)
       }
       FunctionResource(FunctionResourceType.fromString(resourceType), uri.getUri())
     }
@@ -641,8 +633,8 @@ private[client] class Shim_v0_13 extends Shim_v0_12 {
    *
    * Unsupported predicates are skipped.
    */
-  def convertFilters(table: Table, filters: Seq[Expression], timeZoneId: String): String = {
-    lazy val dateFormatter = DateFormatter(DateTimeUtils.getZoneId(timeZoneId))
+  def convertFilters(table: Table, filters: Seq[Expression]): String = {
+    lazy val dateFormatter = DateFormatter()
 
     /**
      * An extractor that matches all binary comparison operators except null-safe equality.
@@ -865,20 +857,18 @@ private[client] class Shim_v0_13 extends Shim_v0_12 {
     } else if (!str.contains("'")) {
       s"""'$str'"""
     } else {
-      throw new UnsupportedOperationException(
-        """Partition filter cannot have both `"` and `'` characters""")
+      throw QueryExecutionErrors.invalidPartitionFilterError()
     }
   }
 
   override def getPartitionsByFilter(
       hive: Hive,
       table: Table,
-      predicates: Seq[Expression],
-      timeZoneId: String): Seq[Partition] = {
+      predicates: Seq[Expression]): Seq[Partition] = {
 
     // Hive getPartitionsByFilter() takes a string that represents partition
     // predicates like "str_key=\"value\" and int_key=1 ..."
-    val filter = convertFilters(table, predicates, timeZoneId)
+    val filter = convertFilters(table, predicates)
 
     val partitions =
       if (filter.isEmpty) {
@@ -908,11 +898,7 @@ private[client] class Shim_v0_13 extends Shim_v0_12 {
             getAllPartitionsMethod.invoke(hive, table).asInstanceOf[JSet[Partition]]
           case ex: InvocationTargetException if ex.getCause.isInstanceOf[MetaException] &&
               tryDirectSql =>
-            throw new RuntimeException("Caught Hive MetaException attempting to get partition " +
-              "metadata by filter from Hive. You can set the Spark configuration setting " +
-              s"${SQLConf.HIVE_MANAGE_FILESOURCE_PARTITIONS.key} to false to work around this " +
-              "problem, however this will result in degraded performance. Please report a bug: " +
-              "https://issues.apache.org/jira/browse/SPARK", ex)
+            throw QueryExecutionErrors.getPartitionMetadataByFilterError(ex)
         }
       }
 
@@ -1320,13 +1306,6 @@ private[client] class Shim_v2_1 extends Shim_v2_0 {
   override def alterPartitions(hive: Hive, tableName: String, newParts: JList[Partition]): Unit = {
     alterPartitionsMethod.invoke(hive, tableName, newParts, environmentContextInAlterTable)
   }
-
-  // HIVE-10319 introduced a new HMS thrift API `get_all_functions` which is used by
-  // `Hive.get` since version 2.1.0, when it loads all Hive permanent functions during
-  // initialization. This breaks compatibility with HMS server of lower versions.
-  // To mitigate here we use `Hive.getWithFastCheck` instead which skips loading the permanent
-  // functions and therefore avoids calling `get_all_functions`.
-  override def getHive(hiveConf: HiveConf): Hive = Hive.getWithFastCheck(hiveConf, false)
 }
 
 private[client] class Shim_v2_2 extends Shim_v2_1

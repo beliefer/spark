@@ -69,6 +69,7 @@ case class Project(projectList: Seq[NamedExpression], child: LogicalPlan)
     extends OrderPreservingUnaryNode {
   override def output: Seq[Attribute] = projectList.map(_.toAttribute)
   override def maxRows: Option[Long] = child.maxRows
+  override def maxRowsPerPartition: Option[Long] = child.maxRowsPerPartition
 
   final override val nodePatterns: Seq[TreePattern] = Seq(PROJECT)
 
@@ -126,6 +127,8 @@ case class Generate(
     child: LogicalPlan)
   extends UnaryNode {
 
+  final override val nodePatterns: Seq[TreePattern] = Seq(GENERATE)
+
   lazy val requiredChildOutput: Seq[Attribute] = {
     val unrequiredSet = unrequiredChildIndex.toSet
     child.output.zipWithIndex.filterNot(t => unrequiredSet.contains(t._2)).map(_._1)
@@ -163,6 +166,7 @@ case class Filter(condition: Expression, child: LogicalPlan)
   override def output: Seq[Attribute] = child.output
 
   override def maxRows: Option[Long] = child.maxRows
+  override def maxRowsPerPartition: Option[Long] = child.maxRowsPerPartition
 
   final override val nodePatterns: Seq[TreePattern] = Seq(FILTER)
 
@@ -208,6 +212,8 @@ case class Intersect(
     isAll: Boolean) extends SetOperation(left, right) {
 
   override def nodeName: String = getClass.getSimpleName + ( if ( isAll ) "All" else "" )
+
+  final override val nodePatterns: Seq[TreePattern] = Seq(INTERSECT)
 
   override def output: Seq[Attribute] =
     left.output.zip(right.output).map { case (leftAttr, rightAttr) =>
@@ -277,6 +283,8 @@ case class Union(
       Some(children.flatMap(_.maxRows).sum)
     }
   }
+
+  final override val nodePatterns: Seq[TreePattern] = Seq(UNION)
 
   /**
    * Note the definition has assumption about how union is implemented physically.
@@ -613,6 +621,7 @@ case class WithWindowDefinition(
     windowDefinitions: Map[String, WindowSpecDefinition],
     child: LogicalPlan) extends UnaryNode {
   override def output: Seq[Attribute] = child.output
+  final override val nodePatterns: Seq[TreePattern] = Seq(WITH_WINDOW_DEFINITION)
   override protected def withNewChildInternal(newChild: LogicalPlan): WithWindowDefinition =
     copy(child = newChild)
 }
@@ -630,6 +639,7 @@ case class Sort(
   override def output: Seq[Attribute] = child.output
   override def maxRows: Option[Long] = child.maxRows
   override def outputOrdering: Seq[SortOrder] = order
+  final override val nodePatterns: Seq[TreePattern] = Seq(SORT)
   override protected def withNewChildInternal(newChild: LogicalPlan): Sort = copy(child = newChild)
 }
 
@@ -746,6 +756,16 @@ case class Range(
     }
   }
 
+  override def maxRowsPerPartition: Option[Long] = {
+    if (numSlices.isDefined) {
+      var m = numElements / numSlices.get
+      if (numElements % numSlices.get != 0) m += 1
+      if (m.isValidLong) Some(m.toLong) else maxRows
+    } else {
+      maxRows
+    }
+  }
+
   override def computeStats(): Statistics = {
     if (numElements == 0) {
       Statistics(sizeInBytes = 0, rowCount = Some(0))
@@ -755,18 +775,59 @@ case class Range(
       } else {
         (start + (numElements - 1) * step, start)
       }
+
+      val histogram = if (conf.histogramEnabled) {
+        Some(computeHistogramStatistics())
+      } else {
+        None
+      }
+
       val colStat = ColumnStat(
         distinctCount = Some(numElements),
         max = Some(maxVal),
         min = Some(minVal),
         nullCount = Some(0),
         avgLen = Some(LongType.defaultSize),
-        maxLen = Some(LongType.defaultSize))
+        maxLen = Some(LongType.defaultSize),
+        histogram = histogram)
 
       Statistics(
         sizeInBytes = LongType.defaultSize * numElements,
         rowCount = Some(numElements),
         attributeStats = AttributeMap(Seq(output.head -> colStat)))
+    }
+  }
+
+  private def computeHistogramStatistics(): Histogram = {
+    val numBins = conf.histogramNumBins
+    val height = numElements.toDouble / numBins
+    val percentileArray = (0 to numBins).map(i => i * height).toArray
+
+    val lowerIndexInitial: Double = percentileArray.head
+    val lowerBinValueInitial: Long = getRangeValue(0)
+    val (_, _, binArray) = percentileArray.tail
+      .foldLeft((lowerIndexInitial, lowerBinValueInitial, Seq.empty[HistogramBin])) {
+        case ((lowerIndex, lowerBinValue, binAr), upperIndex) =>
+          // Integer index for upper and lower values in the bin.
+          val upperIndexPos = math.ceil(upperIndex).toInt - 1
+          val lowerIndexPos = math.ceil(lowerIndex).toInt - 1
+
+          val upperBinValue = getRangeValue(math.max(upperIndexPos, 0))
+          val ndv = math.max(upperIndexPos - lowerIndexPos, 1)
+          // Update the lowerIndex and lowerBinValue with upper ones for the next iteration.
+          (upperIndex, upperBinValue, binAr :+ HistogramBin(lowerBinValue, upperBinValue, ndv))
+      }
+    Histogram(height, binArray.toArray)
+  }
+
+  // Utility method to compute histogram
+  private def getRangeValue(index: Int): Long = {
+    assert(index >= 0, "index must be greater than and equal to 0")
+    if (step < 0) {
+      // Reverse the range values for computing histogram, if the step size is negative.
+      start + (numElements.toLong - index - 1) * step
+    } else {
+      start + index * step
     }
   }
 
@@ -826,6 +887,11 @@ case class Aggregate(
 
   override protected def withNewChildInternal(newChild: LogicalPlan): Aggregate =
     copy(child = newChild)
+
+  // Whether this Aggregate operator is group only. For example: SELECT a, a FROM t GROUP BY a
+  private[sql] def groupOnly: Boolean = {
+    aggregateExpressions.forall(a => groupingExpressions.exists(g => a.semanticEquals(g)))
+  }
 }
 
 case class Window(
@@ -996,6 +1062,7 @@ case class Pivot(
     groupByExprsOpt.getOrElse(Seq.empty).map(_.toAttribute) ++ pivotAgg
   }
   override def metadataOutput: Seq[Attribute] = Nil
+  final override val nodePatterns: Seq[TreePattern] = Seq(PIVOT)
 
   override protected def withNewChildInternal(newChild: LogicalPlan): Pivot = copy(child = newChild)
 }
@@ -1125,6 +1192,8 @@ case class SubqueryAlias(
 
   override def doCanonicalize(): LogicalPlan = child.canonicalized
 
+  final override val nodePatterns: Seq[TreePattern] = Seq(SUBQUERY_ALIAS)
+
   override protected def withNewChildInternal(newChild: LogicalPlan): SubqueryAlias =
     copy(child = newChild)
 }
@@ -1191,6 +1260,7 @@ case class Sample(
 case class Distinct(child: LogicalPlan) extends UnaryNode {
   override def maxRows: Option[Long] = child.maxRows
   override def output: Seq[Attribute] = child.output
+  final override val nodePatterns: Seq[TreePattern] = Seq(DISTINCT_LIKE)
   override protected def withNewChildInternal(newChild: LogicalPlan): Distinct =
     copy(child = newChild)
 }
@@ -1203,6 +1273,7 @@ abstract class RepartitionOperation extends UnaryNode {
   def numPartitions: Int
   override final def maxRows: Option[Long] = child.maxRows
   override def output: Seq[Attribute] = child.output
+  final override val nodePatterns: Seq[TreePattern] = Seq(REPARTITION_OPERATION)
   def partitioning: Partitioning
 }
 
@@ -1302,6 +1373,7 @@ case class Deduplicate(
     child: LogicalPlan) extends UnaryNode {
   override def maxRows: Option[Long] = child.maxRows
   override def output: Seq[Attribute] = child.output
+  final override val nodePatterns: Seq[TreePattern] = Seq(DISTINCT_LIKE)
   override protected def withNewChildInternal(newChild: LogicalPlan): Deduplicate =
     copy(child = newChild)
 }
