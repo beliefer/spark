@@ -68,6 +68,8 @@ case class JoinHint(leftHint: Option[HintInfo], rightHint: Option[HintInfo]) {
       rightHint.map("rightHint=" + _))
       .filter(_.isDefined).map(_.get).mkString(", ")
   }
+
+  def isEmpty: Boolean = leftHint.isEmpty && rightHint.isEmpty
 }
 
 object JoinHint {
