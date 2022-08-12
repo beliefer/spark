@@ -41,15 +41,6 @@ public class BenchmarkAddPrecisionGreatThan18 {
 
     @Benchmark
     @OperationsPerInvocation(BenchmarkData.COUNT)
-    public void addDecimal128(BenchmarkData data)
-    {
-        for (int i = 0; i < BenchmarkData.COUNT; i++) {
-            sink(data.dividends[i].addDestructive(data.divisors[i], (short) 38));
-        }
-    }
-
-    @Benchmark
-    @OperationsPerInvocation(BenchmarkData.COUNT)
     public void addBigint(BenchmarkData data)
     {
         for (int i = 0; i < BenchmarkData.COUNT; i++) {
@@ -75,9 +66,22 @@ public class BenchmarkAddPrecisionGreatThan18 {
         }
     }
 
-    @CompilerControl(CompilerControl.Mode.DONT_INLINE)
-    public static void sink(Decimal128 value)
+    @Benchmark
+    @OperationsPerInvocation(BenchmarkData.COUNT)
+    public void addDecimal128(BenchmarkData data)
     {
+        for (int i = 0; i < BenchmarkData.COUNT; i++) {
+            sink(data.decimal128dividends[i].addDestructive(data.decimal128divisors[i], (short) 38));
+        }
+    }
+
+    @Benchmark
+    @OperationsPerInvocation(BenchmarkData.COUNT)
+    public void addInt128(BenchmarkData data)
+    {
+        for (int i = 0; i < BenchmarkData.COUNT; i++) {
+            sink(Int128.add(data.dividends[i], data.divisors[i]));
+        }
     }
 
     @CompilerControl(CompilerControl.Mode.DONT_INLINE)
@@ -95,6 +99,16 @@ public class BenchmarkAddPrecisionGreatThan18 {
     {
     }
 
+    @CompilerControl(CompilerControl.Mode.DONT_INLINE)
+    public static void sink(Decimal128 value)
+    {
+    }
+
+    @CompilerControl(CompilerControl.Mode.DONT_INLINE)
+    public static void sink(Int128 value)
+    {
+    }
+
     @State(Scope.Thread)
     public static class BenchmarkData
     {
@@ -102,17 +116,20 @@ public class BenchmarkAddPrecisionGreatThan18 {
         private static final Pattern DECIMAL_PATTERN = Pattern.compile("(\\+?|-?)((0*)(\\d*))(\\.(\\d*))?");
         public static final int MAX_SHORT_PRECISION = 18;
 
-        private final Decimal128[] dividends = new Decimal128[COUNT];
-        private final Decimal128[] divisors = new Decimal128[COUNT];
+        private final Int128[] dividends = new Int128[COUNT];
+        private final Int128[] divisors = new Int128[COUNT];
 
         private final BigInteger[] bigintDividends = new BigInteger[COUNT];
         private final BigInteger[] bigintDivisors = new BigInteger[COUNT];
 
+        private final Decimal[] decimalDividends = new Decimal[COUNT];
+        private final Decimal[] decimalDivisors = new Decimal[COUNT];
+
         private final BigDecimal[] bigDecimalDividends = new BigDecimal[COUNT];
         private final BigDecimal[] bigDecimalDivisors = new BigDecimal[COUNT];
 
-        private final Decimal[] decimalDividends = new Decimal[COUNT];
-        private final Decimal[] decimalDivisors = new Decimal[COUNT];
+        private final Decimal128[] decimal128dividends = new Decimal128[COUNT];
+        private final Decimal128[] decimal128divisors = new Decimal128[COUNT];
 
         @Param(value = {"15432.21543600787131", "17432.21543600787131", "15435.21545610787131", "16435.21545640787131", "35465.21545613787131", "154325.21545610787132", "105435.21545610787131", "15435.2154561107871311", "15435.215456107871310"})
         private String dividendMagnitude = "15432.21543600787131";
@@ -125,29 +142,32 @@ public class BenchmarkAddPrecisionGreatThan18 {
         {
             int count = 0;
             while (count < COUNT) {
-                Decimal128 dividend = (Decimal128) testMatcher(dividendMagnitude, true);
-                Decimal128 divisor = (Decimal128) testMatcher(divisorMagnitude, true);
+                Int128 dividend = (Int128) testMatcher(dividendMagnitude, true);
+                Int128 divisor = (Int128) testMatcher(divisorMagnitude, true);
 
                 if (ThreadLocalRandom.current().nextBoolean()) {
-                    dividend.negateDestructive();
+                    dividend = Int128.negate(dividend);
                 }
 
                 if (ThreadLocalRandom.current().nextBoolean()) {
-                    divisor.negateDestructive();
+                    divisor = Int128.negate(divisor);
                 }
 
                 if (!divisor.isZero()) {
                     dividends[count] = dividend;
                     divisors[count] = divisor;
 
-                    decimalDividends[count] = Decimal.apply(dividends[count].toBigDecimal());
-                    decimalDivisors[count] = Decimal.apply(divisors[count].toBigDecimal());
+                    bigintDividends[count] = dividends[count].toBigInteger();
+                    bigintDivisors[count] = divisors[count].toBigInteger();
 
-                    bigintDividends[count] = decimalDividends[count].toJavaBigInteger();
-                    bigintDivisors[count] = decimalDivisors[count].toJavaBigInteger();
+                    decimalDividends[count] = Decimal.apply(bigintDividends[count]);
+                    decimalDivisors[count] = Decimal.apply(bigintDivisors[count]);
 
                     bigDecimalDividends[count] = decimalDividends[count].toJavaBigDecimal();
                     bigDecimalDivisors[count] = decimalDivisors[count].toJavaBigDecimal();
+
+                    decimal128dividends[count] = new Decimal128().update(bigDecimalDividends[count]);
+                    decimal128divisors[count] = new Decimal128().update(bigDecimalDivisors[count]);
 
                     count++;
                 }
@@ -191,7 +211,7 @@ public class BenchmarkAddPrecisionGreatThan18 {
                 value = Long.parseLong(unscaledValue);
             }
             else {
-                value = new Decimal128().update(new BigInteger(unscaledValue), (short) 38);
+                value = Int128.valueOf(new BigInteger(unscaledValue));
             }
 
             return value;
@@ -213,10 +233,11 @@ public class BenchmarkAddPrecisionGreatThan18 {
         BenchmarkData data = new BenchmarkData();
         data.setup();
 
-        addDecimal128(data);
         addBigint(data);
         addBigDecimal(data);
         addDecimal(data);
+        addDecimal128(data);
+        addInt128(data);
     }
 
     public static void main(String[] args)

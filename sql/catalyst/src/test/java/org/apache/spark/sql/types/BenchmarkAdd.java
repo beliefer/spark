@@ -38,15 +38,6 @@ public class BenchmarkAdd {
 
     @Benchmark
     @OperationsPerInvocation(BenchmarkData.COUNT)
-    public void addDecimal128(BenchmarkData data)
-    {
-        for (int i = 0; i < BenchmarkData.COUNT; i++) {
-            sink(data.dividends[i].addDestructive(data.divisors[i], (short) 38));
-        }
-    }
-
-    @Benchmark
-    @OperationsPerInvocation(BenchmarkData.COUNT)
     public void addBigint(BenchmarkData data)
     {
         for (int i = 0; i < BenchmarkData.COUNT; i++) {
@@ -72,9 +63,22 @@ public class BenchmarkAdd {
         }
     }
 
-    @CompilerControl(CompilerControl.Mode.DONT_INLINE)
-    public static void sink(Decimal128 value)
+    @Benchmark
+    @OperationsPerInvocation(BenchmarkData.COUNT)
+    public void addDecimal128(BenchmarkData data)
     {
+        for (int i = 0; i < BenchmarkData.COUNT; i++) {
+            sink(data.decimal128dividends[i].addDestructive(data.decimal128divisors[i], (short) 38));
+        }
+    }
+
+    @Benchmark
+    @OperationsPerInvocation(BenchmarkData.COUNT)
+    public void addInt128(BenchmarkData data)
+    {
+        for (int i = 0; i < BenchmarkData.COUNT; i++) {
+            sink(Int128.add(data.dividends[i], data.divisors[i]));
+        }
     }
 
     @CompilerControl(CompilerControl.Mode.DONT_INLINE)
@@ -92,22 +96,35 @@ public class BenchmarkAdd {
     {
     }
 
+    @CompilerControl(CompilerControl.Mode.DONT_INLINE)
+    public static void sink(Decimal128 value)
+    {
+    }
+
+    @CompilerControl(CompilerControl.Mode.DONT_INLINE)
+    public static void sink(Int128 value)
+    {
+    }
+
     @State(Scope.Thread)
     public static class BenchmarkData
     {
         private static final int COUNT = 1000;
 
-        private final Decimal128[] dividends = new Decimal128[COUNT];
-        private final Decimal128[] divisors = new Decimal128[COUNT];
+        private final Int128[] dividends = new Int128[COUNT];
+        private final Int128[] divisors = new Int128[COUNT];
 
         private final BigInteger[] bigintDividends = new BigInteger[COUNT];
         private final BigInteger[] bigintDivisors = new BigInteger[COUNT];
 
+        private final Decimal[] decimalDividends = new Decimal[COUNT];
+        private final Decimal[] decimalDivisors = new Decimal[COUNT];
+
         private final BigDecimal[] bigDecimalDividends = new BigDecimal[COUNT];
         private final BigDecimal[] bigDecimalDivisors = new BigDecimal[COUNT];
 
-        private final Decimal[] decimalDividends = new Decimal[COUNT];
-        private final Decimal[] decimalDivisors = new Decimal[COUNT];
+        private final Decimal128[] decimal128dividends = new Decimal128[COUNT];
+        private final Decimal128[] decimal128divisors = new Decimal128[COUNT];
 
         @Param(value = {"126", "90", "65", "64", "63", "32", "10", "1", "0"})
         private int dividendMagnitude = 126;
@@ -120,29 +137,32 @@ public class BenchmarkAdd {
         {
             int count = 0;
             while (count < COUNT) {
-                Decimal128 dividend = random(dividendMagnitude);
-                Decimal128 divisor = random(divisorMagnitude);
+                Int128 dividend = Int128.random(dividendMagnitude);
+                Int128 divisor = Int128.random(divisorMagnitude);
 
                 if (ThreadLocalRandom.current().nextBoolean()) {
-                    dividend.negateDestructive();
+                    dividend = Int128.negate(dividend);
                 }
 
                 if (ThreadLocalRandom.current().nextBoolean()) {
-                    divisor.negateDestructive();
+                    divisor = Int128.negate(divisor);
                 }
 
                 if (!divisor.isZero()) {
                     dividends[count] = dividend;
                     divisors[count] = divisor;
 
-                    decimalDividends[count] = Decimal.apply(dividends[count].toBigDecimal());
-                    decimalDivisors[count] = Decimal.apply(divisors[count].toBigDecimal());
+                    bigintDividends[count] = dividends[count].toBigInteger();
+                    bigintDivisors[count] = divisors[count].toBigInteger();
 
-                    bigintDividends[count] = decimalDividends[count].toJavaBigInteger();
-                    bigintDivisors[count] = decimalDivisors[count].toJavaBigInteger();
+                    decimalDividends[count] = Decimal.apply(bigintDividends[count]);
+                    decimalDivisors[count] = Decimal.apply(bigintDivisors[count]);
 
                     bigDecimalDividends[count] = decimalDividends[count].toJavaBigDecimal();
                     bigDecimalDivisors[count] = decimalDivisors[count].toJavaBigDecimal();
+
+                    decimal128dividends[count] = new Decimal128().update(bigDecimalDividends[count]);
+                    decimal128divisors[count] = new Decimal128().update(bigDecimalDivisors[count]);
 
                     count++;
                 }
@@ -163,10 +183,11 @@ public class BenchmarkAdd {
         BenchmarkData data = new BenchmarkData();
         data.setup();
 
-        addDecimal128(data);
         addBigint(data);
         addBigDecimal(data);
         addDecimal(data);
+        addDecimal128(data);
+        addInt128(data);
     }
 
     public static void main(String[] args)
