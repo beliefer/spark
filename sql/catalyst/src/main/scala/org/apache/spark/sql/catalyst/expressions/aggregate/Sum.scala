@@ -57,11 +57,11 @@ abstract class SumBase(child: Expression) extends DeclarativeAggregate
     case _ => DoubleType
   }
 
-  private lazy val sum = AttributeReference("sum", resultType)()
+  private lazy val sum = AttributeReference("sum", dataType)()
 
   private lazy val isEmpty = AttributeReference("isEmpty", BooleanType, nullable = false)()
 
-  private lazy val zero = Literal.default(resultType)
+  private lazy val zero = Literal.default(dataType)
 
   override lazy val aggBufferAttributes = if (shouldTrackIsEmpty) {
     sum :: isEmpty :: Nil
@@ -73,7 +73,7 @@ abstract class SumBase(child: Expression) extends DeclarativeAggregate
     if (shouldTrackIsEmpty) {
       Seq(zero, Literal(true, BooleanType))
     } else {
-      Seq(Literal(null, resultType))
+      Seq(Literal(null, dataType))
     }
 
   protected def getUpdateExpressions: Seq[Expression] = if (shouldTrackIsEmpty) {
@@ -82,9 +82,9 @@ abstract class SumBase(child: Expression) extends DeclarativeAggregate
     // null if overflow happens under non-ansi mode.
     val sumExpr = if (child.nullable) {
       If(child.isNull, sum,
-        Add(sum, KnownNotNull(child).cast(resultType), failOnError = useAnsiAdd))
+        Add(sum, KnownNotNull(child).cast(dataType), failOnError = useAnsiAdd))
     } else {
-      Add(sum, child.cast(resultType), failOnError = useAnsiAdd)
+      Add(sum, child.cast(dataType), failOnError = useAnsiAdd)
     }
     // The buffer becomes non-empty after seeing the first not-null input.
     val isEmptyExpr = if (child.nullable) {
@@ -99,10 +99,10 @@ abstract class SumBase(child: Expression) extends DeclarativeAggregate
     // in case the input is nullable. The `sum` can only be null if there is no value, as
     // non-decimal type can produce overflowed value under non-ansi mode.
     if (child.nullable) {
-      Seq(coalesce(Add(coalesce(sum, zero), child.cast(resultType), failOnError = useAnsiAdd),
+      Seq(coalesce(Add(coalesce(sum, zero), child.cast(dataType), failOnError = useAnsiAdd),
         sum))
     } else {
-      Seq(Add(coalesce(sum, zero), child.cast(resultType), failOnError = useAnsiAdd))
+      Seq(Add(coalesce(sum, zero), child.cast(dataType), failOnError = useAnsiAdd))
     }
   }
 
@@ -124,7 +124,7 @@ abstract class SumBase(child: Expression) extends DeclarativeAggregate
     Seq(
       If(
         bufferOverflow || inputOverflow,
-        Literal.create(null, resultType),
+        Literal.create(null, dataType),
         // If both the buffer and the input do not overflow, just add them, as they can't be
         // null. See the comments inside `updateExpressions`: `sum` can only be null if
         // overflow happens.
@@ -143,13 +143,13 @@ abstract class SumBase(child: Expression) extends DeclarativeAggregate
    * So now, if ansi is enabled, then throw exception, if not then return null.
    * If sum is not null, then return the sum.
    */
-  protected def getEvaluateExpression(queryContext: String): Expression = resultType match {
+  protected def getEvaluateExpression(queryContext: String): Expression = dataType match {
     case d: DecimalType =>
       val checkOverflowInSum =
         CheckOverflowInSum(sum, d, !useAnsiAdd, queryContext)
-      If(isEmpty, Literal.create(null, resultType), checkOverflowInSum)
+      If(isEmpty, Literal.create(null, dataType), checkOverflowInSum)
     case _ if shouldTrackIsEmpty =>
-      If(isEmpty, Literal.create(null, resultType), sum)
+      If(isEmpty, Literal.create(null, dataType), sum)
     case _ => sum
   }
 
@@ -172,13 +172,18 @@ abstract class SumBase(child: Expression) extends DeclarativeAggregate
   since = "1.0.0")
 case class Sum(
     child: Expression,
-    useAnsiAdd: Boolean = SQLConf.get.ansiEnabled)
+    useAnsiAdd: Boolean = SQLConf.get.ansiEnabled,
+    resultDataType: Option[DataType] = None)
   extends SumBase(child) with SupportQueryContext {
   def this(child: Expression) = this(child, useAnsiAdd = SQLConf.get.ansiEnabled)
 
-  override def shouldTrackIsEmpty: Boolean = resultType match {
+  override def shouldTrackIsEmpty: Boolean = dataType match {
     case _: DecimalType => true
     case _ => false
+  }
+
+  override def dataType: DataType = resultDataType.getOrElse {
+    super.dataType
   }
 
   override protected def withNewChildInternal(newChild: Expression): Sum = copy(child = newChild)

@@ -220,6 +220,10 @@ public final class UnsafeFixedWidthAggregationMap {
     map.free();
   }
 
+  public int getNumKeys() {
+    return map.numKeys();
+  }
+
   /**
    * Gets the average bucket list iterations per lookup in the underlying `BytesToBytesMap`.
    */
