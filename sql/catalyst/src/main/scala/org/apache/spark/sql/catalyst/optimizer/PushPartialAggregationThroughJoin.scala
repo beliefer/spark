@@ -156,7 +156,7 @@ object PushPartialAggregationThroughJoin extends Rule[LogicalPlan]
         val countType = if (resultType.isInstanceOf[DecimalType]) LongDecimal else resultType
         val child = if (hasBenefit) aliasMap(e.canonicalized).toAttribute else e.child
         val newChild =
-          otherSideCnt.map(c => Multiply(child.cast(resultType), c.cast(countType), useAnsiAdd))
+          otherSideCnt.map(c => Multiply(child.cast(resultType), c.cast(resultType), useAnsiAdd))
             .getOrElse(child)
         Sum(newChild, useAnsiAdd, Some(dt.getOrElse(resultType)))
       case e: Count if aliasMap.contains(e.canonicalized) =>
@@ -221,7 +221,7 @@ object PushPartialAggregationThroughJoin extends Rule[LogicalPlan]
                       avg.queryContext,
                       !useAnsiAdd))
                 case _ =>
-                  Divide(sum.cast(avg.dataType), count.cast(avg.dataType))
+                  Divide(sum.cast(avg.dataType), count.cast(avg.dataType), false)
               }
             case _ => ae
           }
@@ -248,12 +248,12 @@ object PushPartialAggregationThroughJoin extends Rule[LogicalPlan]
   }
 
   private def constructPartialAgg(
-                                   joinKeys: Seq[Attribute],
-                                   groupExps: Seq[NamedExpression],
-                                   remainingExps: Seq[NamedExpression],
-                                   aliasMap: Map[Expression, Alias],
-                                   rowCnt: Alias,
-                                   plan: LogicalPlan): PartialAggregate = {
+      joinKeys: Seq[Attribute],
+      groupExps: Seq[NamedExpression],
+      remainingExps: Seq[NamedExpression],
+      aliasMap: Map[Expression, Alias],
+      rowCnt: Alias,
+      plan: LogicalPlan): PartialAggregate = {
     val partialGroupingExps = ExpressionSet(joinKeys ++ groupExps).toSeq
     val partialAggExps = joinKeys ++ groupExps ++ remainingExps ++ (aliasMap.values.toSeq :+ rowCnt)
     PartialAggregate(partialGroupingExps, deduplicateNamedExpressions(partialAggExps), plan)
@@ -280,11 +280,11 @@ object PushPartialAggregationThroughJoin extends Rule[LogicalPlan]
   // The entry of push down partial aggregate through join.
   // Will return the current aggregate if it can't push down.
   private def pushAggThroughJoin(
-                                  agg: Aggregate,
-                                  projectList: Seq[NamedExpression],
-                                  leftKeys: Seq[Expression],
-                                  rightKeys: Seq[Expression],
-                                  join: Join): LogicalPlan = {
+      agg: Aggregate,
+      projectList: Seq[NamedExpression],
+      leftKeys: Seq[Expression],
+      rightKeys: Seq[Expression],
+      join: Join): LogicalPlan = {
     val rewrittenAgg = rewriteAverage(agg)
     val aggregateExpressions = rewrittenAgg.collectAggregateExprs
 

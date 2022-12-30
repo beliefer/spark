@@ -572,7 +572,7 @@ class PushPartialAggregationThroughJoinSuite
           correctLeft.join(correctRight,
             joinType = Inner, condition = Some('a === 'x))
             .select('b, '_pushed_sum_c, 'cnt)
-            .groupBy('b)(sumWithDataType('_pushed_sum_c * 'cnt.cast(DecimalType.LongDecimal),
+            .groupBy('b)(sumWithDataType('_pushed_sum_c * 'cnt.cast(DecimalType(27, 2)),
               ansiEnabled,
               Some(DecimalType(27, 2))).as("sum_c"))
             .analyzePlan

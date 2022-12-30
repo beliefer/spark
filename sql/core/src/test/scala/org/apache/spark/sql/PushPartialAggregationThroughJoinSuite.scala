@@ -94,7 +94,7 @@ class PushPartialAggregationThroughJoinSuite extends QueryTest
     Seq(-1, 1000000000L).foreach { broadcastThreshold =>
       Seq(true, false).foreach { pushAgg =>
         Seq(0.1, 0.5, 1.0).foreach { ratio =>
-          Seq(true, false).foreach { ansi =>
+          Seq(true).foreach { ansi =>
             withSQLConf(
               SQLConf.AUTO_BROADCASTJOIN_THRESHOLD.key -> s"$broadcastThreshold",
               SQLConf.PARTIAL_AGGREGATION_OPTIMIZATION_ENABLED.key -> s"$pushAgg",
@@ -125,7 +125,7 @@ class PushPartialAggregationThroughJoinSuite extends QueryTest
                 val error = intercept[SparkException] {
                   df.collect()
                 }
-                assert(error.toString contains "[ARITHMETIC_OVERFLOW] Overflow in sum of decimals")
+                assert(error.toString contains "Overflow in sum of decimals")
               } else {
                 checkAnswer(
                   df,
@@ -282,7 +282,7 @@ class PushPartialAggregationThroughJoinSuite extends QueryTest
     Seq(-1, 1000000000L).foreach { broadcastThreshold =>
       Seq(true, false).foreach { pushAgg =>
         Seq(0.1, 0.5, 1.0).foreach { ratio =>
-          Seq(true, false).foreach { ansi =>
+          Seq(true).foreach { ansi =>
             withSQLConf(
               SQLConf.AUTO_BROADCASTJOIN_THRESHOLD.key -> s"$broadcastThreshold",
               SQLConf.PARTIAL_AGGREGATION_OPTIMIZATION_ENABLED.key -> s"$pushAgg",
