@@ -532,6 +532,7 @@ object FunctionRegistry {
     expression[TryToNumber]("try_to_number"),
     expression[ToCharacter]("to_char"),
     expression[ToCharacter]("to_varchar", setAlias = true, Some("3.5.0")),
+    expression[ToBinary]("to_binary"),
     expression[GetJsonObject]("get_json_object"),
     expression[InitCap]("initcap"),
     expression[StringInstr]("instr"),
@@ -625,7 +626,6 @@ object FunctionRegistry {
     expression[Second]("second"),
     expression[ParseToTimestamp]("to_timestamp"),
     expression[ParseToDate]("to_date"),
-    expression[ToBinary]("to_binary"),
     expression[ToUnixTimestamp]("to_unix_timestamp"),
     expression[ToUTCTimestamp]("to_utc_timestamp"),
     // We keep the 2 expression builders below to have different function docs.
