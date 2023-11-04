@@ -464,6 +464,15 @@ class InjectRuntimeFilterSuite extends QueryTest with SQLTestUtils with SharedSp
     }
   }
 
+  test("Runtime bloom filter join: nested runtime filter") {
+    withSQLConf(SQLConf.RUNTIME_BLOOM_FILTER_APPLICATION_SIDE_SCAN_SIZE_THRESHOLD.key -> "3000",
+      SQLConf.AUTO_BROADCASTJOIN_THRESHOLD.key -> "2000",
+      SQLConf.RUNTIME_BLOOM_FILTER_MAX_NESTED_DEPTH.key -> "2") {
+      assertRewroteWithBloomFilter("select * from bf1 join bf2 join bf3 join bf4 " +
+        "on bf1.a1 = bf2.a2 and bf2.b2 = bf3.b3 and bf3.c3 = bf4.c4 where bf4.d4 = 5", 3)
+    }
+  }
+
   test("Runtime bloom filter join: add bloom filter if the creation side exists bloom filter") {
     withSQLConf(SQLConf.RUNTIME_BLOOM_FILTER_APPLICATION_SIDE_SCAN_SIZE_THRESHOLD.key -> "3000",
       SQLConf.AUTO_BROADCASTJOIN_THRESHOLD.key -> "2000") {

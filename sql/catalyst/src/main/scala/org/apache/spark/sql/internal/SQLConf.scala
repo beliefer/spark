@@ -383,6 +383,17 @@ object SQLConf {
       .bytesConf(ByteUnit.BYTE)
       .createWithDefaultString("10GB")
 
+  val RUNTIME_BLOOM_FILTER_MAX_NESTED_DEPTH =
+    buildConf("spark.sql.optimizer.runtime.bloomFilter.maxNestedDepth")
+      .doc("The maximum depth of a bloom filter in a nested bloom filter. A nested bloom filter " +
+        "may reference other bloom filter. By setting this value to 0, nested bloom filter can " +
+        "be disabled.")
+      .version("3.3.0")
+      .intConf
+      .checkValue(v => v >= 0 && v < 5,
+        "the value of maxNestedDepth must be greater than or equal to 0 and less than 5")
+      .createWithDefault(1)
+
   val RUNTIME_BLOOM_FILTER_STATISTICS_ADJUST_FACTOR =
     buildConf("spark.sql.optimizer.runtime.bloomFilter.statisticsAdjustFactor")
       .doc("When estimating the output data size of a plan, multiply the byte size with this " +
@@ -3972,6 +3983,8 @@ class SQLConf extends Serializable with Logging {
 
   def runtimeFilterCreationSideThreshold: Long =
     getConf(RUNTIME_BLOOM_FILTER_CREATION_SIDE_THRESHOLD)
+
+  def maxNestedBloomFilterDepth: Int = getConf(SQLConf.RUNTIME_BLOOM_FILTER_MAX_NESTED_DEPTH)
 
   def stateStoreProviderClass: String = getConf(STATE_STORE_PROVIDER_CLASS)
 

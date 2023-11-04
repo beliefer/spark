@@ -117,6 +117,16 @@ object InjectRuntimeFilter extends Rule[LogicalPlan] with PredicateHelper with J
             val runtimeFilteringRatio = estimateSelectiveFilteringRatio(buildPlan)
             (1 - filterRatio) * runtimeFilteringRatio *
               conf.getConf(SQLConf.RUNTIME_BLOOM_FILTER_PREDICATE_ADJUST_FACTOR)
+
+          case BloomFilterMightContain(RuntimeFilterSubquery(_,
+            Aggregate(_, Seq(Alias(AggregateExpression(
+              BloomFilterAggregate(XxHash64Key(buildKey), _, _, _, _), _, _, _, _),
+            _)), buildPlan), _, _), XxHash64Key(pruningKey)) =>
+            val filterRatio =
+              estimateFilteringRatio(pruningKey, pruningPlan, buildKey, buildPlan, conf)
+            val runtimeFilteringRatio = estimateSelectiveFilteringRatio(buildPlan)
+            (1 - filterRatio) * runtimeFilteringRatio *
+              conf.getConf(SQLConf.RUNTIME_BLOOM_FILTER_PREDICATE_ADJUST_FACTOR)
         }
 
         if (ratios.isEmpty) {
@@ -250,7 +260,7 @@ object InjectRuntimeFilter extends Rule[LogicalPlan] with PredicateHelper with J
           val (filteringSubquerys, otherPredicates) =
             splitConjunctivePredicates(condition).partition {
               case _: DynamicPruningSubquery => true
-              case BloomFilterMightContain(_: ScalarSubquery, _) => true
+              case _: BloomFilterMightContain => true
               case _ => false
             }
 
@@ -512,7 +522,11 @@ object InjectRuntimeFilter extends Rule[LogicalPlan] with PredicateHelper with J
             if (canPruneLeft(joinType) && (hasShuffle || probablyHasShuffle(left))) {
               extractBeneficialFilterCreatePlan(left, right, l, r).foreach {
                 case (filterCreationSideExp, filterCreationSidePlan) =>
-                  newLeft = injectFilter(l, newLeft, filterCreationSideExp, filterCreationSidePlan)
+                  if (filterCreationSideExp.isInstanceOf[AttributeReference] &&
+                    !filterCreationSideExp.asInstanceOf[AttributeReference].name.startsWith("o_")) {
+                    newLeft =
+                      injectFilter(l, newLeft, filterCreationSideExp, filterCreationSidePlan)
+                  }
               }
             }
             // Did we actually inject on the left? If not, try on the right
@@ -522,8 +536,11 @@ object InjectRuntimeFilter extends Rule[LogicalPlan] with PredicateHelper with J
               (hasShuffle || probablyHasShuffle(right))) {
               extractBeneficialFilterCreatePlan(right, left, r, l).foreach {
                 case (filterCreationSideExp, filterCreationSidePlan) =>
-                  newRight =
-                    injectFilter(r, newRight, filterCreationSideExp, filterCreationSidePlan)
+                  if (filterCreationSideExp.isInstanceOf[AttributeReference] &&
+                    !filterCreationSideExp.asInstanceOf[AttributeReference].name.startsWith("o_")) {
+                    newRight =
+                      injectFilter(r, newRight, filterCreationSideExp, filterCreationSidePlan)
+                  }
               }
             }
             if (!newLeft.fastEquals(oldLeft) || !newRight.fastEquals(oldRight)) {
@@ -559,10 +576,17 @@ object InjectRuntimeFilter extends Rule[LogicalPlan] with PredicateHelper with J
       // Try to inject runtime filter based on simple and selective predicates or
       // dynamic pruning subquery.
       val (newPlan, currentFilterCount) = tryInjectRuntimeFilter(plan)
-      // Push down the predicates of runtime filter.
-      val pushedPlan = pushDownPredicates(newPlan)
-      // Try to inject runtime filter based on bloom filter subquery.
-      val (finalPlan, _) = tryInjectRuntimeFilter(pushedPlan, currentFilterCount)
+      var finalPlan = newPlan
+      var finalFilterCount = currentFilterCount
+      (1 to conf.maxNestedBloomFilterDepth) foreach { i =>
+        // Push down the predicates of runtime filter.
+        val pushedPlan = pushDownPredicates(finalPlan)
+        // Try to inject runtime filter based on bloom filter subquery.
+        val (newPlan, currentFilterCount) = tryInjectRuntimeFilter(pushedPlan, finalFilterCount)
+        finalPlan = newPlan
+        finalFilterCount = currentFilterCount
+      }
+
       if (conf.runtimeFilterSemiJoinReductionEnabled && !plan.fastEquals(finalPlan)) {
         RewritePredicateSubquery(finalPlan)
       } else {

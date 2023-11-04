@@ -17,7 +17,7 @@
 
 package org.apache.spark.sql.execution.adaptive
 
-import org.apache.spark.sql.catalyst.expressions.{BloomFilterMightContain, Literal, RuntimeFilterExpression}
+import org.apache.spark.sql.catalyst.expressions.{BloomFilterMightContain, Literal, PredicateHelper, RuntimeFilterExpression}
 import org.apache.spark.sql.catalyst.rules.Rule
 import org.apache.spark.sql.catalyst.trees.TreePattern.{RUNTIME_FILTER_EXPRESSION, SUBQUERY_WRAPPER}
 import org.apache.spark.sql.execution.{InputAdapter, ProjectExec, ScalarSubquery, SparkPlan, SubqueryAdaptiveBroadcastExec, SubqueryBroadcastExec, SubqueryExec, SubqueryWrapper}
@@ -27,19 +27,15 @@ import org.apache.spark.sql.execution.exchange.{BroadcastExchangeExec, ShuffleEx
 /**
  * A rule to insert runtime filter in order to reuse exchange.
  */
-case class PlanAdaptiveRuntimeFilterFilters(
-    rootPlan: AdaptiveSparkPlanExec) extends Rule[SparkPlan] with AdaptiveSparkPlanHelper {
+case class PlanAdaptiveRuntimeFilterFilters(rootPlan: AdaptiveSparkPlanExec)
+  extends Rule[SparkPlan] with AdaptiveSparkPlanHelper with PredicateHelper {
 
-  def apply(plan: SparkPlan): SparkPlan = {
-    if (!conf.runtimeFilterBloomFilterEnabled) {
-      return plan
-    }
-
+  private def reuseExchange(plan: SparkPlan): SparkPlan = {
     plan.transformAllExpressionsWithPruning(
       _.containsAllPatterns(RUNTIME_FILTER_EXPRESSION, SUBQUERY_WRAPPER)) {
-      case filterMightContain @ BloomFilterMightContain(RuntimeFilterExpression(SubqueryWrapper(
-      SubqueryAdaptiveBroadcastExec(name, index, true, _, buildKeys,
-      adaptivePlan: AdaptiveSparkPlanExec), exprId)), _) =>
+      case filterMightContain @ BloomFilterMightContain(RuntimeFilterExpression(
+        SubqueryWrapper(SubqueryAdaptiveBroadcastExec(name, index, true, _, buildKeys,
+        adaptivePlan: AdaptiveSparkPlanExec), exprId)), _) =>
         val filterCreationSidePlan = getFilterCreationSidePlan(adaptivePlan.executedPlan)
 
         if (conf.exchangeReuseEnabled && buildKeys.nonEmpty) {
@@ -74,8 +70,9 @@ case class PlanAdaptiveRuntimeFilterFilters(
                 val newInputAdapter = inputAdapter.withNewChildren(Seq(exchangeProxy))
                 p.withNewChildren(Seq(newInputAdapter))
             }
-            val newAdaptivePlan = adaptivePlan.copy(inputPlan = newExecutedPlan)
 
+            val replacedExecutedPlan = reuseExchange(newExecutedPlan)
+            val newAdaptivePlan = adaptivePlan.copy(inputPlan = replacedExecutedPlan)
             val scalarSubquery = ScalarSubquery(
               SubqueryExec.createForScalarSubquery(
                 s"scalar-subquery#${exprId.id}",
@@ -89,6 +86,14 @@ case class PlanAdaptiveRuntimeFilterFilters(
           RuntimeFilterExpression(Literal.TrueLiteral)
         }
     }
+  }
+
+  def apply(plan: SparkPlan): SparkPlan = {
+    if (!conf.runtimeFilterBloomFilterEnabled) {
+      return plan
+    }
+
+    reuseExchange(plan)
   }
 
   private def getFilterCreationSidePlan(plan: SparkPlan): SparkPlan = {
