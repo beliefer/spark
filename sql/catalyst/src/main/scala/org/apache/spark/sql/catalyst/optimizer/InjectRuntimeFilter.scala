@@ -66,6 +66,76 @@ object InjectRuntimeFilter extends Rule[LogicalPlan] with PredicateHelper with J
   }
 
   private def hasSelectiveFilteringSubquery(plan: LogicalPlan): Boolean = {
+    def isEqualLikePredicate(expr: Expression, plan: LogicalPlan): Boolean = expr match {
+      case a EqualNullSafe b =>
+        (b.foldable && !a.nullable && plan.output.exists(_.semanticEquals(a))) ||
+          (a.foldable && !b.nullable && plan.output.exists(_.semanticEquals(b)))
+      case a EqualTo b =>
+        (b.foldable && plan.output.exists(_.semanticEquals(a))) ||
+          (a.foldable && plan.output.exists(_.semanticEquals(b)))
+      case _ => false
+    }
+
+    def estimateEqualLikePredicate(expr: Expression, buildPlan: LogicalPlan): Double = {
+      val distinctCount = expr.references.toList match {
+        case attr :: Nil =>
+          distinctCounts(attr, buildPlan)
+        case _ => None
+      }
+
+      if (distinctCount.isDefined && distinctCount.get > 0) {
+        1 / distinctCount.get.toDouble
+      } else {
+        0.1
+      }
+    }
+
+    def estimate(plan: LogicalPlan): Double = {
+      plan match {
+        case Filter(condition, pruningPlan) =>
+          val predicates = splitConjunctivePredicates(condition)
+          val (equals, others) = predicates.partition(isEqualLikePredicate(_, pruningPlan))
+          val equalsRatios = equals.map(estimateEqualLikePredicate(_, pruningPlan))
+          val otherRatios = others.map {
+            case DynamicPruningSubquery(pruningKey, buildPlan, buildKeys, index, _, _) =>
+              val buildKey = buildKeys(index)
+              val filterRatio =
+                estimateFilteringRatio(pruningKey, pruningPlan, buildKey, buildPlan, conf)
+              val dynamicPruningRatio = estimate(buildPlan)
+              (1 - filterRatio) * dynamicPruningRatio
+            case BloomFilterMightContain(ScalarSubquery(
+              Aggregate(_, Seq(Alias(AggregateExpression(
+              BloomFilterAggregate(XxHash64Key(buildKey), _, _, _, _), _, _, _, _),
+              _)), buildPlan), _, _, _), XxHash64Key(pruningKey)) =>
+              val runtimeFilteringRatio = estimate(buildPlan)
+              runtimeFilteringRatio *
+                conf.getConf(SQLConf.RUNTIME_BLOOM_FILTER_PREDICATE_ADJUST_FACTOR)
+            case BloomFilterMightContain(RuntimeFilterSubquery(_,
+              Aggregate(_, Seq(Alias(AggregateExpression(
+              BloomFilterAggregate(XxHash64Key(buildKey), _, _, _, _), _, _, _, _),
+              _)), buildPlan), _, _), XxHash64Key(pruningKey)) =>
+              val runtimeFilteringRatio = estimate(buildPlan)
+              runtimeFilteringRatio *
+                conf.getConf(SQLConf.RUNTIME_BLOOM_FILTER_PREDICATE_ADJUST_FACTOR)
+            case _ => 0.9
+          }
+
+          (equalsRatios ++ otherRatios).reduce(_ * _)
+        case Project(_, filter: Filter) =>
+          estimate(filter)
+        case Project(_, ProjectAdapter(_, filter: Filter)) =>
+          estimate(filter)
+        case _ => 1
+      }
+    }
+
+    val estimated = estimate(plan)
+    conf.getConf(SQLConf.RUNTIME_BLOOM_FILTER_STATISTICS_ADJUST_FACTOR) *
+      estimated * plan.stats.sizeInBytes.toDouble <=
+      conf.runtimeFilterCreationSideThreshold
+  }
+
+  private def hasSelectiveFilteringSubquery2(plan: LogicalPlan): Boolean = {
     def estimateSelectiveFilteringRatio(buildPlan: LogicalPlan): Double = {
       val filterKeys = buildPlan.collect {
         case Filter(condition, child) =>
@@ -274,7 +344,9 @@ object InjectRuntimeFilter extends Rule[LogicalPlan] with PredicateHelper with J
             currentPlan,
             currentFilterCreationSideExp)
           if (conf.exchangeReuseEnabled && !existsLikelySelective && filteringSubquerys.nonEmpty) {
-            extracted.map { case (e, p) =>
+            extracted.filter { case (e, p) =>
+              p.output.exists(_.semanticEquals(e))
+            }.map { case (e, p) =>
               (e, ProjectAdapter(p.output, p))
             }
           } else {
@@ -522,11 +594,7 @@ object InjectRuntimeFilter extends Rule[LogicalPlan] with PredicateHelper with J
             if (canPruneLeft(joinType) && (hasShuffle || probablyHasShuffle(left))) {
               extractBeneficialFilterCreatePlan(left, right, l, r).foreach {
                 case (filterCreationSideExp, filterCreationSidePlan) =>
-                  if (filterCreationSideExp.isInstanceOf[AttributeReference] &&
-                    !filterCreationSideExp.asInstanceOf[AttributeReference].name.startsWith("o_")) {
-                    newLeft =
-                      injectFilter(l, newLeft, filterCreationSideExp, filterCreationSidePlan)
-                  }
+                  newLeft = injectFilter(l, newLeft, filterCreationSideExp, filterCreationSidePlan)
               }
             }
             // Did we actually inject on the left? If not, try on the right
@@ -536,11 +604,8 @@ object InjectRuntimeFilter extends Rule[LogicalPlan] with PredicateHelper with J
               (hasShuffle || probablyHasShuffle(right))) {
               extractBeneficialFilterCreatePlan(right, left, r, l).foreach {
                 case (filterCreationSideExp, filterCreationSidePlan) =>
-                  if (filterCreationSideExp.isInstanceOf[AttributeReference] &&
-                    !filterCreationSideExp.asInstanceOf[AttributeReference].name.startsWith("o_")) {
-                    newRight =
-                      injectFilter(r, newRight, filterCreationSideExp, filterCreationSidePlan)
-                  }
+                  newRight =
+                    injectFilter(r, newRight, filterCreationSideExp, filterCreationSidePlan)
               }
             }
             if (!newLeft.fastEquals(oldLeft) || !newRight.fastEquals(oldRight)) {
@@ -576,12 +641,18 @@ object InjectRuntimeFilter extends Rule[LogicalPlan] with PredicateHelper with J
       // Try to inject runtime filter based on simple and selective predicates or
       // dynamic pruning subquery.
       val (newPlan, currentFilterCount) = tryInjectRuntimeFilter(plan)
+
+      // Only supports nested bloom filter
+      if (!conf.runtimeFilterBloomFilterEnabled) {
+        return newPlan
+      }
+
       var finalPlan = newPlan
       var finalFilterCount = currentFilterCount
-      (1 to conf.maxNestedBloomFilterDepth) foreach { i =>
-        // Push down the predicates of runtime filter.
+      (1 to conf.maxNestedBloomFilterDepth) foreach { _ =>
+        // Push down the bloom filter.
         val pushedPlan = pushDownPredicates(finalPlan)
-        // Try to inject runtime filter based on bloom filter subquery.
+        // Try to inject new bloom filter based on exists bloom filter.
         val (newPlan, currentFilterCount) = tryInjectRuntimeFilter(pushedPlan, finalFilterCount)
         finalPlan = newPlan
         finalFilterCount = currentFilterCount

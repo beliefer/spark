@@ -25,18 +25,18 @@ import org.apache.spark.sql.execution.aggregate.ObjectHashAggregateExec
 import org.apache.spark.sql.execution.exchange.{BroadcastExchangeExec, ShuffleExchangeExec, SubqueryBroadcastExecProxy}
 
 /**
- * A rule to insert runtime filter in order to reuse exchange.
+ * A rule to plan adaptive runtime filter in order to reuse exchange.
  */
-case class PlanAdaptiveRuntimeFilterFilters(rootPlan: AdaptiveSparkPlanExec)
+case class PlanAdaptiveRuntimeFilters(rootPlan: AdaptiveSparkPlanExec)
   extends Rule[SparkPlan] with AdaptiveSparkPlanHelper with PredicateHelper {
 
-  private def reuseExchange(plan: SparkPlan): SparkPlan = {
+  private def reuseFilterCreationSideWithExchange(plan: SparkPlan): SparkPlan = {
     plan.transformAllExpressionsWithPruning(
       _.containsAllPatterns(RUNTIME_FILTER_EXPRESSION, SUBQUERY_WRAPPER)) {
       case filterMightContain @ BloomFilterMightContain(RuntimeFilterExpression(
         SubqueryWrapper(SubqueryAdaptiveBroadcastExec(name, index, true, _, buildKeys,
         adaptivePlan: AdaptiveSparkPlanExec), exprId)), _) =>
-        val filterCreationSidePlan = getFilterCreationSidePlan(adaptivePlan.executedPlan)
+        val filterCreationSidePlan = findFilterCreationSidePlan(adaptivePlan.executedPlan)
 
         if (conf.exchangeReuseEnabled && buildKeys.nonEmpty) {
           val optionalExchange = collectFirst(rootPlan) {
@@ -52,8 +52,7 @@ case class PlanAdaptiveRuntimeFilterFilters(rootPlan: AdaptiveSparkPlanExec)
                 exchange.outputPartitioning, exchange.child, exchange.shuffleOrigin)
           }
 
-          if (optionalExchange.isDefined) {
-            val exchange = optionalExchange.get
+          optionalExchange.map { case exchange =>
             exchange.setLogicalLink(filterCreationSidePlan.logicalLink.get)
 
             val newExecutedPlan = adaptivePlan.executedPlan transformUp {
@@ -71,17 +70,18 @@ case class PlanAdaptiveRuntimeFilterFilters(rootPlan: AdaptiveSparkPlanExec)
                 p.withNewChildren(Seq(newInputAdapter))
             }
 
-            val replacedExecutedPlan = reuseExchange(newExecutedPlan)
-            val newAdaptivePlan = adaptivePlan.copy(inputPlan = replacedExecutedPlan)
+            val replacedExecutedPlan = reuseFilterCreationSideWithExchange(newExecutedPlan)
+            if (!replacedExecutedPlan.sameResult(newExecutedPlan)) {
+              assert(replacedExecutedPlan.sameResult(newExecutedPlan))
+            }
+            val newAdaptivePlan = adaptivePlan.copy(inputPlan = newExecutedPlan)
             val scalarSubquery = ScalarSubquery(
               SubqueryExec.createForScalarSubquery(
                 s"scalar-subquery#${exprId.id}",
                 newAdaptivePlan), exprId)
             filterMightContain.withNewChildren(
               Seq(RuntimeFilterExpression(scalarSubquery), filterMightContain.valueExpression))
-          } else {
-            RuntimeFilterExpression(Literal.TrueLiteral)
-          }
+          }.getOrElse(RuntimeFilterExpression(Literal.TrueLiteral))
         } else {
           RuntimeFilterExpression(Literal.TrueLiteral)
         }
@@ -93,22 +93,23 @@ case class PlanAdaptiveRuntimeFilterFilters(rootPlan: AdaptiveSparkPlanExec)
       return plan
     }
 
-    reuseExchange(plan)
+    reuseFilterCreationSideWithExchange(plan)
   }
 
-  private def getFilterCreationSidePlan(plan: SparkPlan): SparkPlan = {
+  private def findFilterCreationSidePlan(plan: SparkPlan): SparkPlan = {
     plan match {
       case objectHashAggregate: ObjectHashAggregateExec =>
-        getFilterCreationSidePlan(objectHashAggregate.child)
+        findFilterCreationSidePlan(objectHashAggregate.child)
       case shuffleExchange: ShuffleExchangeExec =>
-        getFilterCreationSidePlan(shuffleExchange.child)
+        findFilterCreationSidePlan(shuffleExchange.child)
       case queryStageExec: ShuffleQueryStageExec =>
-        getFilterCreationSidePlan(queryStageExec.plan)
+        findFilterCreationSidePlan(queryStageExec.plan)
       case ProjectExec(_, inputAdapter: InputAdapter) =>
-        getFilterCreationSidePlan(inputAdapter.child)
+        findFilterCreationSidePlan(inputAdapter.child)
       case inputAdapter: InputAdapter =>
-        getFilterCreationSidePlan(inputAdapter.child)
-      case other => other
+        findFilterCreationSidePlan(inputAdapter.child)
+      case other =>
+        other
     }
   }
 }
