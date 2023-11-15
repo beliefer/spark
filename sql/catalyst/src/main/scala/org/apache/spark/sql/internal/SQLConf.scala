@@ -379,6 +379,14 @@ object SQLConf {
       .checkValue(threshold => threshold >= 0, "The threshold should be >= 0")
       .createWithDefault(10)
 
+  val RUNTIME_FILTER_APPLICATION_SIDE_INFERENCE_ENABLED =
+    buildConf("spark.sql.optimizer.runtimeFilter.applicationSideInference.enabled")
+      .doc("When true, we attempt to infer more runtime filter application sides by using " +
+        "the transitivity of the join key.")
+      .version("4.0.0")
+      .booleanConf
+      .createWithDefault(false)
+
   val RUNTIME_BLOOM_FILTER_ENABLED =
     buildConf("spark.sql.optimizer.runtime.bloomFilter.enabled")
       .doc("When true and if one side of a shuffle join has a selective predicate, we attempt " +
@@ -4723,6 +4731,9 @@ class SQLConf extends Serializable with Logging with SqlApiConf {
 
   def dynamicPartitionPruningReuseBroadcastOnly: Boolean =
     getConf(DYNAMIC_PARTITION_PRUNING_REUSE_BROADCAST_ONLY)
+
+  def runtimeFilterApplicationSideInferenceEnabled: Boolean =
+    getConf(RUNTIME_FILTER_APPLICATION_SIDE_INFERENCE_ENABLED)
 
   def runtimeFilterBloomFilterEnabled: Boolean =
     getConf(RUNTIME_BLOOM_FILTER_ENABLED)

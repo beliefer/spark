@@ -18,6 +18,7 @@
 package org.apache.spark.sql.catalyst.optimizer
 
 import scala.annotation.tailrec
+import scala.collection.mutable
 
 import org.apache.spark.sql.catalyst.expressions._
 import org.apache.spark.sql.catalyst.expressions.aggregate.BloomFilterAggregate
@@ -37,12 +38,12 @@ import org.apache.spark.sql.internal.SQLConf
 object InjectRuntimeFilter extends Rule[LogicalPlan] with PredicateHelper with JoinSelectionHelper {
 
   private def injectFilter(
-      filterApplicationSideKey: Expression,
+      filterApplicationSideKeys: Seq[Expression],
       filterApplicationSidePlan: LogicalPlan,
       filterCreationSideKey: Expression,
       filterCreationSidePlan: LogicalPlan): LogicalPlan = {
     injectBloomFilter(
-      filterApplicationSideKey,
+      filterApplicationSideKeys,
       filterApplicationSidePlan,
       filterCreationSideKey,
       filterCreationSidePlan
@@ -50,7 +51,7 @@ object InjectRuntimeFilter extends Rule[LogicalPlan] with PredicateHelper with J
   }
 
   private def injectBloomFilter(
-      filterApplicationSideKey: Expression,
+      filterApplicationSideKeys: Seq[Expression],
       filterApplicationSidePlan: LogicalPlan,
       filterCreationSideKey: Expression,
       filterCreationSidePlan: LogicalPlan): LogicalPlan = {
@@ -69,10 +70,12 @@ object InjectRuntimeFilter extends Rule[LogicalPlan] with PredicateHelper with J
     val alias = Alias(bloomFilterAgg.toAggregateExpression(), "bloomFilter")()
     val aggregate =
       ConstantFolding(ColumnPruning(Aggregate(Nil, Seq(alias), filterCreationSidePlan)))
-    val bloomFilterSubquery = ScalarSubquery(aggregate, Nil)
-    val filter = BloomFilterMightContain(bloomFilterSubquery,
-      new XxHash64(Seq(filterApplicationSideKey)))
-    Filter(filter, filterApplicationSidePlan)
+    val filters = filterApplicationSideKeys.map { filterApplicationSideKey =>
+      val bloomFilterSubquery = ScalarSubquery(aggregate, Nil)
+      BloomFilterMightContain(bloomFilterSubquery, new XxHash64(Seq(filterApplicationSideKey)))
+    }
+
+    Filter(filters.reduce(And), filterApplicationSidePlan)
   }
 
   /**
@@ -161,6 +164,57 @@ object InjectRuntimeFilter extends Rule[LogicalPlan] with PredicateHelper with J
         currentPlan = plan, targetKey = filterCreationSideKey)
     } else {
       None
+    }
+  }
+
+  private def inferFilterApplicationSides(
+      plan: LogicalPlan,
+      filterApplicationSideKey: Expression): Seq[Expression] = {
+    val inferred = mutable.ArrayBuffer.empty[Expression]
+    @tailrec
+    def infer(
+        p: LogicalPlan,
+        targetKey: Expression): Unit = p match {
+      case project @ Project(_, child)
+        if project.references.exists(_.semanticEquals(targetKey)) =>
+        infer(child, targetKey)
+      case Filter(_, child) =>
+        infer(child, targetKey)
+      case ExtractEquiJoinKeys(joinType, lkeys, rkeys, _, _, left, right, hint) =>
+        val hasShuffle = isProbablyShuffleJoin(left, right, hint)
+        if (left.output.exists(_.semanticEquals(targetKey)) && canPruneRight(joinType) &&
+          (hasShuffle || probablyHasShuffle(right)) && satisfyByteSizeRequirement(right)) {
+          // Inferring filter application side key using depth first
+          val passedKey = lkeys.zip(rkeys).find(_._1.semanticEquals(targetKey)).map(_._2)
+
+          if (passedKey.isDefined) {
+            infer(right, targetKey = passedKey.get)
+          } else {
+            infer(left, targetKey = targetKey)
+          }
+        } else if (right.output.exists(_.semanticEquals(targetKey)) && canPruneLeft(joinType) &&
+          (hasShuffle || probablyHasShuffle(left)) && satisfyByteSizeRequirement(left)) {
+          // Inferring filter application side key using depth first
+          val passedKey = rkeys.zip(lkeys).find(_._1.semanticEquals(targetKey)).map(_._2)
+
+          if (passedKey.isDefined) {
+            infer(left, targetKey = passedKey.get)
+          } else {
+            infer(right, targetKey = targetKey)
+          }
+        } else {
+          inferred += targetKey
+        }
+      case _: LeafNode =>
+        inferred += targetKey
+      case _ =>
+    }
+
+    if (conf.runtimeFilterApplicationSideInferenceEnabled) {
+      infer(plan, filterApplicationSideKey)
+      (filterApplicationSideKey +: inferred).distinct.toSeq
+    } else {
+      Seq(filterApplicationSideKey)
     }
   }
 
@@ -285,7 +339,16 @@ object InjectRuntimeFilter extends Rule[LogicalPlan] with PredicateHelper with J
               !hasBloomFilter(newLeft, l)) {
               extractBeneficialFilterCreatePlan(left, right, l, r).foreach {
                 case (filterCreationSideKey, filterCreationSidePlan) =>
-                  newLeft = injectFilter(l, newLeft, filterCreationSideKey, filterCreationSidePlan)
+                  val filterApplicationSideKeys = inferFilterApplicationSides(newLeft, l)
+                  val limit =
+                    Math.min(filterApplicationSideKeys.size, numFilterThreshold - filterCounter - 1)
+                  val finalApplicationSideKeys = filterApplicationSideKeys.take(limit)
+                  newLeft = injectFilter(
+                    finalApplicationSideKeys,
+                    newLeft,
+                    filterCreationSideKey,
+                    filterCreationSidePlan)
+                  filterCounter = filterCounter + limit
               }
             }
             // Did we actually inject on the left? If not, try on the right
@@ -298,12 +361,17 @@ object InjectRuntimeFilter extends Rule[LogicalPlan] with PredicateHelper with J
               (hasShuffle || probablyHasShuffle(right)) && !hasBloomFilter(newRight, r)) {
               extractBeneficialFilterCreatePlan(right, left, r, l).foreach {
                 case (filterCreationSideKey, filterCreationSidePlan) =>
+                  val filterApplicationSideKeys = inferFilterApplicationSides(newRight, r)
+                  val limit =
+                    Math.min(filterApplicationSideKeys.size, numFilterThreshold - filterCounter - 1)
+                  val finalApplicationSideKeys = filterApplicationSideKeys.take(limit)
                   newRight = injectFilter(
-                    r, newRight, filterCreationSideKey, filterCreationSidePlan)
+                    finalApplicationSideKeys,
+                    newRight,
+                    filterCreationSideKey,
+                    filterCreationSidePlan)
+                  filterCounter = filterCounter + limit
               }
-            }
-            if (!newLeft.fastEquals(oldLeft) || !newRight.fastEquals(oldRight)) {
-              filterCounter = filterCounter + 1
             }
           }
         })
