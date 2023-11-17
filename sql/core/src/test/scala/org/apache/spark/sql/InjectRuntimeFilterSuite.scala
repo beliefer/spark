@@ -470,8 +470,8 @@ class InjectRuntimeFilterSuite extends QueryTest with SQLTestUtils with SharedSp
       SQLConf.RUNTIME_BLOOM_FILTER_MAX_NESTED_DEPTH.key -> "2") {
       assertRewroteWithBloomFilter("select * from bf1 join bf2 join bf3 join bf4 " +
         "on bf1.a1 = bf2.a2 and bf2.b2 = bf3.b3 and bf3.c3 = bf4.c4 where bf4.d4 = 5", 3)
-//      assertRewroteWithBloomFilter("select * from bf2 join bf1 join bf3 join bf4 " +
-//        "on bf1.a1 = bf2.a2 and bf2.b2 = bf3.b3 and bf3.c3 = bf4.c4 where bf4.d4 = 5", 3)
+      assertRewroteWithBloomFilter("select * from bf2 join bf1 join bf3 join bf4 " +
+        "on bf1.a1 = bf2.a2 and bf2.b2 = bf3.b3 and bf3.c3 = bf4.c4 where bf4.d4 = 5", 3)
     }
   }
 

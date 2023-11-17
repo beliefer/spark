@@ -403,14 +403,24 @@ object SQLConf {
       .checkValue(_ > 0, "the value of statisticsAdjustFactor must be greater than 0")
       .createWithDefault(0.5)
 
+  val DYNAMIC_PARTITION_PRUNING_PREDICATE_ADJUST_FACTOR =
+    buildConf("spark.sql.optimizer.runtime.bloomFilter.dpp.predicateAdjustFactor")
+      .doc("When estimating the output data size of a plan, multiply the ratio of selective " +
+        "predicate with this factor as the estimated filtering ratio, in case the statistics " +
+        "is not accurate enough. This config is only used for dynamic partition pruning.")
+      .version("3.3.0")
+      .doubleConf
+      .checkValue(_ > 0, "the value must be greater than 0")
+      .createWithDefault(0.1)
+
   val RUNTIME_BLOOM_FILTER_PREDICATE_ADJUST_FACTOR =
     buildConf("spark.sql.optimizer.runtime.bloomFilter.predicateAdjustFactor")
       .doc("When estimating the output data size of a plan, multiply the ratio of selective " +
         "predicate with this factor as the estimated filtering ratio, in case the statistics " +
-        "is not accurate enough.")
+        "is not accurate enough. This config is only used for bloom filter.")
       .version("3.3.0")
       .doubleConf
-      .checkValue(_ > 0, "the value of predicateAdjustFactor must be greater than 0")
+      .checkValue(_ > 0, "the value must be greater than 0")
       .createWithDefault(0.1)
 
   val RUNTIME_BLOOM_FILTER_MAX_PUSHDOWN_PREDICATES_ATTEMPTS =

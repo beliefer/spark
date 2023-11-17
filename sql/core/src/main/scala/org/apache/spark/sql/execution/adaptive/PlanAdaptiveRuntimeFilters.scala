@@ -17,18 +17,28 @@
 
 package org.apache.spark.sql.execution.adaptive
 
-import org.apache.spark.sql.catalyst.expressions.{BloomFilterMightContain, Literal, PredicateHelper, RuntimeFilterExpression}
+import org.apache.spark.sql.catalyst.expressions.{BloomFilterMightContain, Expression, Literal, PredicateHelper, RuntimeFilterExpression}
+import org.apache.spark.sql.catalyst.plans.physical.BroadcastMode
 import org.apache.spark.sql.catalyst.rules.Rule
 import org.apache.spark.sql.catalyst.trees.TreePattern.{RUNTIME_FILTER_EXPRESSION, SUBQUERY_WRAPPER}
 import org.apache.spark.sql.execution.{InputAdapter, ProjectExec, ScalarSubquery, SparkPlan, SubqueryAdaptiveBroadcastExec, SubqueryBroadcastExec, SubqueryExec, SubqueryWrapper}
 import org.apache.spark.sql.execution.aggregate.ObjectHashAggregateExec
 import org.apache.spark.sql.execution.exchange.{BroadcastExchangeExec, ShuffleExchangeExec, SubqueryBroadcastExecProxy}
+import org.apache.spark.sql.execution.joins.HashedRelationBroadcastMode
+import org.apache.spark.sql.types.LongType
 
 /**
  * A rule to plan adaptive runtime filter in order to reuse exchange.
  */
 case class PlanAdaptiveRuntimeFilters(rootPlan: AdaptiveSparkPlanExec)
   extends Rule[SparkPlan] with AdaptiveSparkPlanHelper with PredicateHelper {
+
+  private def checkBroadcastExchangeMode(
+      mode: BroadcastMode, buildKeys: Seq[Expression]): Boolean = mode match {
+    case hashMode: HashedRelationBroadcastMode if hashMode.key.head.dataType == LongType =>
+      buildKeys.head.dataType == LongType
+    case _ => true
+  }
 
   private def reuseFilterCreationSideWithExchange(plan: SparkPlan): SparkPlan = {
     plan.transformAllExpressionsWithPruning(
@@ -42,8 +52,8 @@ case class PlanAdaptiveRuntimeFilters(rootPlan: AdaptiveSparkPlanExec)
           val optionalExchange = collectFirst(rootPlan) {
             case exchange: BroadcastExchangeExec
               if exchange.child.sameResult(filterCreationSidePlan) &&
-                buildKeys.forall(k => exchange.output.exists(_.semanticEquals(k))) =>
-
+                buildKeys.forall(k => exchange.output.exists(_.semanticEquals(k))) &&
+                checkBroadcastExchangeMode(exchange.mode, buildKeys) =>
               BroadcastExchangeExec(exchange.mode, filterCreationSidePlan)
             case exchange: ShuffleExchangeExec
               if exchange.child.sameResult(filterCreationSidePlan) &&
@@ -71,10 +81,7 @@ case class PlanAdaptiveRuntimeFilters(rootPlan: AdaptiveSparkPlanExec)
             }
 
             val replacedExecutedPlan = reuseFilterCreationSideWithExchange(newExecutedPlan)
-            if (!replacedExecutedPlan.sameResult(newExecutedPlan)) {
-              assert(replacedExecutedPlan.sameResult(newExecutedPlan))
-            }
-            val newAdaptivePlan = adaptivePlan.copy(inputPlan = newExecutedPlan)
+            val newAdaptivePlan = adaptivePlan.copy(inputPlan = replacedExecutedPlan)
             val scalarSubquery = ScalarSubquery(
               SubqueryExec.createForScalarSubquery(
                 s"scalar-subquery#${exprId.id}",
