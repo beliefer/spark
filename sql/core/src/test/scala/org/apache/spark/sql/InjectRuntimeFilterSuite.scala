@@ -371,10 +371,12 @@ class InjectRuntimeFilterSuite extends QueryTest with SQLTestUtils with SharedSp
       // Inferring a new application side key(c1) from the initial application side key(c2)
       assertRewroteWithBloomFilter("select * from bf1 join bf2 join bf3 join bf4 " +
         "on bf1.c1 = bf2.c2 and bf2.c2 = bf3.c3 where bf3.a3 = 5", 2)
-      // Inferring filter application side key using depth first
-      // Inferring a new application side key(c1) from the initial application side key(c3)
+      // Inferring two new application side key(c1 & c2) from the initial application side key(c3)
       assertRewroteWithBloomFilter("select * from bf1 join bf2 join bf3 join bf4 " +
-        "on bf1.c1 = bf2.c2 and bf2.c2 = bf3.c3 and bf3.c3 = bf4.c4 where bf4.a4 = 5", 2)
+        "on bf1.c1 = bf2.c2 and bf2.c2 = bf3.c3 and bf3.c3 = bf4.c4 where bf4.a4 = 5", 3)
+      // Can't find the next key with bf2.c2, inferring nothing from the initial key(c2)
+      assertRewroteWithBloomFilter("select * from bf1 join bf2 join bf3 join bf4 " +
+        "on bf1.d1 = bf2.d2 and bf2.c2 = bf3.c3 where bf3.a3 = 5")
     }
 
     withSQLConf(SQLConf.RUNTIME_BLOOM_FILTER_APPLICATION_SIDE_SCAN_SIZE_THRESHOLD.key -> "3400",
@@ -383,9 +385,8 @@ class InjectRuntimeFilterSuite extends QueryTest with SQLTestUtils with SharedSp
       // bf1 doesn't satisfy byte size requirement, inferring nothing from the initial key(c2)
       assertRewroteWithBloomFilter("select * from bf1 join bf2 join bf3 join bf4 " +
         "on bf1.c1 = bf2.c2 and bf2.c2 = bf3.c3 where bf3.a3 = 5", 1)
-      // Inferring filter application side key using depth first,
-      // but bf1 doesn't satisfy byte size requirement
-      // Inferring a new application side key(c2) from the initial application side key(c3)
+      // bf1 doesn't satisfy byte size requirement, inferring a new application side key(c2)
+      // from the initial application side key(c3)
       assertRewroteWithBloomFilter("select * from bf1 join bf2 join bf3 join bf4 " +
         "on bf1.c1 = bf2.c2 and bf2.c2 = bf3.c3 and bf3.c3 = bf4.c4 where bf4.a4 = 5", 2)
     }

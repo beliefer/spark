@@ -171,7 +171,6 @@ object InjectRuntimeFilter extends Rule[LogicalPlan] with PredicateHelper with J
       plan: LogicalPlan,
       filterApplicationSideKey: Expression): Seq[Expression] = {
     val inferred = mutable.ArrayBuffer.empty[Expression]
-    @tailrec
     def infer(
         p: LogicalPlan,
         targetKey: Expression): Unit = p match {
@@ -185,23 +184,17 @@ object InjectRuntimeFilter extends Rule[LogicalPlan] with PredicateHelper with J
         if (left.output.exists(_.semanticEquals(targetKey)) && canPruneRight(joinType) &&
           (hasShuffle || probablyHasShuffle(right)) && satisfyByteSizeRequirement(right)) {
           // Inferring filter application side key using depth first
-          val passedKey = lkeys.zip(rkeys).find(_._1.semanticEquals(targetKey)).map(_._2)
-
-          if (passedKey.isDefined) {
-            infer(right, targetKey = passedKey.get)
-          } else {
-            infer(left, targetKey = targetKey)
+          lkeys.zip(rkeys).find(_._1.semanticEquals(targetKey)).map(_._2).foreach { passedKey =>
+            infer(right, targetKey = passedKey)
           }
+          infer(left, targetKey = targetKey)
         } else if (right.output.exists(_.semanticEquals(targetKey)) && canPruneLeft(joinType) &&
           (hasShuffle || probablyHasShuffle(left)) && satisfyByteSizeRequirement(left)) {
           // Inferring filter application side key using depth first
-          val passedKey = rkeys.zip(lkeys).find(_._1.semanticEquals(targetKey)).map(_._2)
-
-          if (passedKey.isDefined) {
-            infer(left, targetKey = passedKey.get)
-          } else {
-            infer(right, targetKey = targetKey)
+          rkeys.zip(lkeys).find(_._1.semanticEquals(targetKey)).map(_._2).foreach { passedKey =>
+            infer(left, targetKey = passedKey)
           }
+          infer(right, targetKey = targetKey)
         } else {
           inferred += targetKey
         }
@@ -212,7 +205,7 @@ object InjectRuntimeFilter extends Rule[LogicalPlan] with PredicateHelper with J
 
     if (conf.runtimeFilterApplicationSideInferenceEnabled) {
       infer(plan, filterApplicationSideKey)
-      (filterApplicationSideKey +: inferred).distinct.toSeq
+      inferred.toSeq
     } else {
       Seq(filterApplicationSideKey)
     }
@@ -341,7 +334,7 @@ object InjectRuntimeFilter extends Rule[LogicalPlan] with PredicateHelper with J
                 case (filterCreationSideKey, filterCreationSidePlan) =>
                   val filterApplicationSideKeys = inferFilterApplicationSides(newLeft, l)
                   val limit =
-                    Math.min(filterApplicationSideKeys.size, numFilterThreshold - filterCounter - 1)
+                    Math.min(filterApplicationSideKeys.size, numFilterThreshold - filterCounter)
                   val finalApplicationSideKeys = filterApplicationSideKeys.take(limit)
                   newLeft = injectFilter(
                     finalApplicationSideKeys,
@@ -363,7 +356,7 @@ object InjectRuntimeFilter extends Rule[LogicalPlan] with PredicateHelper with J
                 case (filterCreationSideKey, filterCreationSidePlan) =>
                   val filterApplicationSideKeys = inferFilterApplicationSides(newRight, r)
                   val limit =
-                    Math.min(filterApplicationSideKeys.size, numFilterThreshold - filterCounter - 1)
+                    Math.min(filterApplicationSideKeys.size, numFilterThreshold - filterCounter)
                   val finalApplicationSideKeys = filterApplicationSideKeys.take(limit)
                   newRight = injectFilter(
                     finalApplicationSideKeys,
