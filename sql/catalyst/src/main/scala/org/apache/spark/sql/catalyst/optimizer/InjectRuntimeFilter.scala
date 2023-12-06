@@ -65,172 +65,117 @@ object InjectRuntimeFilter extends Rule[LogicalPlan] with PredicateHelper with J
     }
   }
 
-  private def hasSelectiveFilteringSubquery(plan: LogicalPlan): Boolean = {
-    def isEqualLike(expr: Expression, plan: LogicalPlan): Boolean = expr match {
-      case a EqualNullSafe b =>
-        (b.foldable && !a.nullable && plan.output.exists(_.semanticEquals(a))) ||
-          (a.foldable && !b.nullable && plan.output.exists(_.semanticEquals(b)))
-      case a EqualTo b =>
-        (b.foldable && plan.output.exists(_.semanticEquals(a))) ||
-          (a.foldable && plan.output.exists(_.semanticEquals(b)))
-      case _ => false
-    }
-
-    def isRuntimePruning(expr: Expression): Boolean = expr match {
-      case _: DynamicPruningSubquery => true
-      case _: BloomFilterMightContain => true
-      case _ => false
-    }
-
-    def estimateEqualLike(expr: Expression, buildPlan: LogicalPlan): Double = {
-      val distinctCount = expr.references.toList match {
+  // Estimate the ratio of selective filters.
+  def estimateSelectiveFilteringRatio(buildPlan: LogicalPlan): Double = {
+    def estimateWithDistinctCount(expr: Expression): Option[Double] = {
+      val distinctCountOption = expr.references.toList match {
         case attr :: Nil =>
           distinctCounts(attr, buildPlan)
         case _ => None
       }
 
-      if (distinctCount.isDefined && distinctCount.get > 0) {
-        1 / distinctCount.get.toDouble
-      } else {
-        0.1
+      distinctCountOption.map {
+        case distinctCount if distinctCount > 0 => 1 / distinctCount.toDouble
       }
     }
 
-    def estimateRuntimePruning(expr: Expression, pruningPlan: LogicalPlan): Double = expr match {
+    def estimate(expr: Expression, plan: LogicalPlan): Double = expr match {
+      case a EqualNullSafe b
+        if b.foldable && plan.output.exists(_.semanticEquals(a)) =>
+        estimateWithDistinctCount(a).getOrElse(0.1)
+      case a EqualNullSafe b
+        if a.foldable && plan.output.exists(_.semanticEquals(b)) =>
+        estimateWithDistinctCount(b).getOrElse(0.1)
+      case a EqualTo b
+        if b.foldable && plan.output.exists(_.semanticEquals(a)) =>
+        estimateWithDistinctCount(a).getOrElse(0.1)
+      case a EqualTo b
+        if a.foldable && plan.output.exists(_.semanticEquals(b)) =>
+        estimateWithDistinctCount(b).getOrElse(0.1)
+      case _: BinaryComparison => 0.7
+      case InSet(v, hset: Set[Any]) if plan.output.exists(_.semanticEquals(v)) =>
+        estimateWithDistinctCount(v).getOrElse {
+          if (hset.size > 100) {
+            0.9
+          } else if (hset.size > 50) {
+            0.8
+          } else if (hset.size > 30) {
+            0.7
+          } else if (hset.size > 15) {
+            0.6
+          } else if (hset.size > 10) {
+            0.5
+          } else if (hset.size > 5) {
+            0.4
+          } else {
+            0.3
+          }
+        }
+      case In(v, list: Seq[Expression]) if plan.output.exists(_.semanticEquals(v)) =>
+        estimateWithDistinctCount(v).getOrElse {
+          if (list.size > 100) {
+            0.9
+          } else if (list.size > 50) {
+            0.8
+          } else if (list.size > 30) {
+            0.7
+          } else if (list.size > 15) {
+            0.6
+          } else if (list.size > 10) {
+            0.5
+          } else if (list.size > 5) {
+            0.4
+          } else {
+            0.3
+          }
+        }
+      case And(l, r) =>
+        estimate(l, plan) * estimate(r, plan)
+      case Or(l, r) =>
+        estimate(l, plan) + estimate(r, plan)
       case DynamicPruningSubquery(pruningKey, buildPlan, buildKeys, index, _, _) =>
         val buildKey = buildKeys(index)
         val filterRatio =
-          estimateFilteringRatio(pruningKey, pruningPlan, buildKey, buildPlan, conf)
-        val dynamicPruningRatio = estimate(buildPlan)
-        (1 - filterRatio) * dynamicPruningRatio *
-          conf.getConf(SQLConf.DYNAMIC_PARTITION_PRUNING_PREDICATE_ADJUST_FACTOR)
+          estimateFilteringRatio(pruningKey, plan, buildKey, buildPlan, conf)
+        val dynamicPruningRatio = estimateSelectiveFilteringRatio(buildPlan)
+        (1 - filterRatio) * dynamicPruningRatio
       case BloomFilterMightContain(ScalarSubquery(
-      Aggregate(_, Seq(Alias(AggregateExpression(
-      BloomFilterAggregate(XxHash64Key(buildKey), _, _, _, _), _, _, _, _),
-      _)), buildPlan), _, _, _), XxHash64Key(pruningKey)) =>
-        val runtimeFilteringRatio = estimate(buildPlan)
-        runtimeFilteringRatio *
+        Aggregate(_, Seq(Alias(AggregateExpression(
+        BloomFilterAggregate(XxHash64Key(buildKey), _, _, _, _), _, _, _, _),
+        _)), buildPlan), _, _, _), XxHash64Key(pruningKey)) =>
+        val filterRatio =
+          estimateFilteringRatio(pruningKey, plan, buildKey, buildPlan, conf)
+        val runtimeFilteringRatio = estimateSelectiveFilteringRatio(buildPlan)
+        (1 - filterRatio) * runtimeFilteringRatio *
           conf.getConf(SQLConf.RUNTIME_BLOOM_FILTER_PREDICATE_ADJUST_FACTOR)
       case BloomFilterMightContain(RuntimeFilterSubquery(_,
-      Aggregate(_, Seq(Alias(AggregateExpression(
-      BloomFilterAggregate(XxHash64Key(buildKey), _, _, _, _), _, _, _, _),
-      _)), buildPlan), _, _), XxHash64Key(pruningKey)) =>
-        val runtimeFilteringRatio = estimate(buildPlan)
-        runtimeFilteringRatio
-      case _ => 1
+        Aggregate(_, Seq(Alias(AggregateExpression(
+        BloomFilterAggregate(XxHash64Key(buildKey), _, _, _, _), _, _, _, _),
+        _)), buildPlan), _, _), XxHash64Key(pruningKey)) =>
+        val filterRatio =
+          estimateFilteringRatio(pruningKey, plan, buildKey, buildPlan, conf)
+        val runtimeFilteringRatio = estimateSelectiveFilteringRatio(buildPlan)
+        (1 - filterRatio) * runtimeFilteringRatio *
+          conf.getConf(SQLConf.RUNTIME_BLOOM_FILTER_PREDICATE_ADJUST_FACTOR)
+      case _ => 0.9
     }
 
-    def estimate(plan: LogicalPlan): Double = {
-      plan match {
-        case Filter(condition, pruningPlan) =>
-          val predicates = splitConjunctivePredicates(condition)
-          val (equals, others) = predicates.partition(isEqualLike(_, pruningPlan))
-          val (prunes, remains) = others.partition(isRuntimePruning(_))
-          val equalsRatios = equals.map(estimateEqualLike(_, pruningPlan))
-          val prunesRatios = prunes.map(estimateRuntimePruning(_, pruningPlan))
-          val selectiveRatios = equalsRatios ++ prunesRatios
-          val selectiveRatio = if (selectiveRatios.isEmpty) {
-            1
-          } else {
-            val negativeRatios = (0 until selectiveRatios.size - 1).map(_ => 1.5)
-            (selectiveRatios ++ negativeRatios).reduce(_ * _)
-          }
-          if (remains.isEmpty) {
-            selectiveRatio
-          } else {
-            selectiveRatio * 0.9
-          }
-        case Project(_, project: Project) =>
-          estimate(project)
-        case Project(_, filter: Filter) =>
-          estimate(filter)
-        case Project(_, ProjectAdapter(_, filter: Filter)) =>
-          estimate(filter)
-        case _ => 1
-      }
-    }
+    val predicateRatios = buildPlan.collect {
+      case Filter(condition, child) =>
+        splitConjunctivePredicates(condition).map { predicate =>
+          estimate(predicate, child)
+        }
+    }.flatten
 
-    val estimated = estimate(plan)
-    conf.getConf(SQLConf.RUNTIME_BLOOM_FILTER_STATISTICS_ADJUST_FACTOR) *
-      estimated * plan.stats.sizeInBytes.toDouble <=
-      conf.runtimeFilterCreationSideThreshold
+    predicateRatios.reduce(_ * _)
   }
 
-  private def hasSelectiveFilteringSubquery2(plan: LogicalPlan): Boolean = {
-    def estimateSelectiveFilteringRatio(buildPlan: LogicalPlan): Double = {
-      val filterKeys = buildPlan.collect {
-        case Filter(condition, child) =>
-          splitConjunctivePredicates(condition).collect {
-            case a EqualNullSafe b
-              if b.foldable && !a.nullable && child.output.exists(_.semanticEquals(a)) => a
-            case a EqualNullSafe b
-              if a.foldable && !b.nullable && child.output.exists(_.semanticEquals(b)) => b
-            case a EqualTo b
-              if b.foldable && child.output.exists(_.semanticEquals(a)) => a
-            case a EqualTo b
-              if a.foldable && child.output.exists(_.semanticEquals(b)) => b
-          }
-      }.flatten
+  private def hasSelectivePredicate(plan: LogicalPlan): Boolean = {
+    val ratio = estimateSelectiveFilteringRatio(plan)
 
-      if (filterKeys.isEmpty) {
-        0.9
-      } else {
-        filterKeys.map(_.references.toList).map {
-          case attr :: Nil =>
-            distinctCounts(attr, buildPlan)
-          case _ => None
-        }.map { distinctCount =>
-          if (distinctCount.isDefined && distinctCount.get > 0) {
-            1 / distinctCount.get.toDouble
-          } else {
-            0.1
-          }
-        }.reduce(_ * _)
-      }
-    }
-
-    plan.find {
-      case Filter(condition, pruningPlan) =>
-        val ratios = splitConjunctivePredicates(condition).collect {
-          case DynamicPruningSubquery(pruningKey, buildPlan, buildKeys, index, _, _) =>
-            val buildKey = buildKeys(index)
-            val filterRatio =
-              estimateFilteringRatio(pruningKey, pruningPlan, buildKey, buildPlan, conf)
-            val dynamicPruningRatio = estimateSelectiveFilteringRatio(buildPlan)
-            (1 - filterRatio) * dynamicPruningRatio
-
-          case BloomFilterMightContain(ScalarSubquery(
-            Aggregate(_, Seq(Alias(AggregateExpression(
-              BloomFilterAggregate(XxHash64Key(buildKey), _, _, _, _), _, _, _, _),
-            _)), buildPlan), _, _, _), XxHash64Key(pruningKey)) =>
-            val filterRatio =
-              estimateFilteringRatio(pruningKey, pruningPlan, buildKey, buildPlan, conf)
-            val runtimeFilteringRatio = estimateSelectiveFilteringRatio(buildPlan)
-            (1 - filterRatio) * runtimeFilteringRatio *
-              conf.getConf(SQLConf.RUNTIME_BLOOM_FILTER_PREDICATE_ADJUST_FACTOR)
-
-          case BloomFilterMightContain(RuntimeFilterSubquery(_,
-            Aggregate(_, Seq(Alias(AggregateExpression(
-              BloomFilterAggregate(XxHash64Key(buildKey), _, _, _, _), _, _, _, _),
-            _)), buildPlan), _, _), XxHash64Key(pruningKey)) =>
-            val filterRatio =
-              estimateFilteringRatio(pruningKey, pruningPlan, buildKey, buildPlan, conf)
-            val runtimeFilteringRatio = estimateSelectiveFilteringRatio(buildPlan)
-            (1 - filterRatio) * runtimeFilteringRatio *
-              conf.getConf(SQLConf.RUNTIME_BLOOM_FILTER_PREDICATE_ADJUST_FACTOR)
-        }
-
-        if (ratios.isEmpty) {
-          false
-        } else {
-          val finalRatio = ratios.reduce(_ * _)
-
-          conf.getConf(SQLConf.RUNTIME_BLOOM_FILTER_STATISTICS_ADJUST_FACTOR) *
-            finalRatio * pruningPlan.stats.sizeInBytes.toDouble <=
-            conf.runtimeFilterCreationSideThreshold
-        }
-      case _ => false
-    }.isDefined
+    conf.getConf(SQLConf.RUNTIME_BLOOM_FILTER_STATISTICS_ADJUST_FACTOR) *
+      ratio * plan.stats.sizeInBytes.toDouble <=
+      conf.runtimeFilterCreationSideThreshold
   }
 
   private def injectBloomFilter(
@@ -241,11 +186,11 @@ object InjectRuntimeFilter extends Rule[LogicalPlan] with PredicateHelper with J
     // Skip if the filter creation side is too big
     filterCreationSidePlan match {
       case ProjectAdapter(_, child) =>
-        if (!hasSelectiveFilteringSubquery(child)) {
+        if (!hasSelectivePredicate(child)) {
           return filterApplicationSidePlan
         }
       case _ =>
-        if (filterCreationSidePlan.stats.sizeInBytes > conf.runtimeFilterCreationSideThreshold) {
+        if (!hasSelectivePredicate(filterCreationSidePlan)) {
           return filterApplicationSidePlan
         }
     }
@@ -359,7 +304,7 @@ object InjectRuntimeFilter extends Rule[LogicalPlan] with PredicateHelper with J
         extract(child, predicateReference, hasHitFilter, hasHitSelectiveFilter, currentPlan,
           currentFilterCreationSideExp)
       case Filter(condition, child) if isSimpleExpression(condition) =>
-        if (conf.runtimeFilterBloomFilterEnabled) {
+        if (conf.runtimeFilterBloomFilterEnabled && conf.adaptiveExecutionEnabled) {
           val (filteringSubquerys, otherPredicates) =
             splitConjunctivePredicates(condition).partition {
               case _: DynamicPruningSubquery => true
@@ -677,7 +622,7 @@ object InjectRuntimeFilter extends Rule[LogicalPlan] with PredicateHelper with J
       val (newPlan, currentFilterCount) = tryInjectRuntimeFilter(plan)
 
       // Only supports nested bloom filter
-      if (!conf.runtimeFilterBloomFilterEnabled) {
+      if (!conf.runtimeFilterBloomFilterEnabled || !conf.adaptiveExecutionEnabled) {
         return newPlan
       }
 
