@@ -13,6 +13,152 @@ AS testData(a, b), false, true, LocalTempView, true
 
 
 -- !query
+CREATE TABLE t1 (key STRING, value INT, ds STRING) USING parquet PARTITIONED BY (ds)
+-- !query analysis
+org.apache.spark.sql.catalyst.analysis.TableAlreadyExistsException
+{
+  "errorClass" : "TABLE_OR_VIEW_ALREADY_EXISTS",
+  "sqlState" : "42P07",
+  "messageParameters" : {
+    "relationName" : "`spark_catalog`.`default`.`t1`"
+  }
+}
+
+
+-- !query
+INSERT INTO TABLE t1 PARTITION (ds='2017-08-01')
+VALUES ('k1', 100), ('k2', 200), ('k3', 300), ('k4', 400)
+-- !query analysis
+InsertIntoHadoopFsRelationCommand file:[not included in comparison]/{warehouse_dir}/t1, [ds=2017-08-01], false, [ds#x], Parquet, [path=file:[not included in comparison]/{warehouse_dir}/t1], Append, `spark_catalog`.`default`.`t1`, org.apache.spark.sql.execution.datasources.CatalogFileIndex(file:[not included in comparison]/{warehouse_dir}/t1), [key, value, ds]
++- Project [key#x, value#x, cast(2017-08-01 as string) AS ds#x]
+   +- Project [cast(col1#x as string) AS key#x, cast(col2#x as int) AS value#x]
+      +- LocalRelation [col1#x, col2#x]
+
+
+-- !query
+INSERT INTO TABLE t1 PARTITION (ds='2017-08-02')
+VALUES ('k1', 110), ('k2', 210), ('k3', 310), ('k4', 410)
+-- !query analysis
+InsertIntoHadoopFsRelationCommand file:[not included in comparison]/{warehouse_dir}/t1, [ds=2017-08-02], false, [ds#x], Parquet, [path=file:[not included in comparison]/{warehouse_dir}/t1], Append, `spark_catalog`.`default`.`t1`, org.apache.spark.sql.execution.datasources.CatalogFileIndex(file:[not included in comparison]/{warehouse_dir}/t1), [key, value, ds]
++- Project [key#x, value#x, cast(2017-08-02 as string) AS ds#x]
+   +- Project [cast(col1#x as string) AS key#x, cast(col2#x as int) AS value#x]
+      +- LocalRelation [col1#x, col2#x]
+
+
+-- !query
+INSERT INTO TABLE t1 PARTITION (ds='2017-08-03')
+VALUES ('k1', 120), ('k3', 320), ('k4', 420)
+-- !query analysis
+InsertIntoHadoopFsRelationCommand file:[not included in comparison]/{warehouse_dir}/t1, [ds=2017-08-03], false, [ds#x], Parquet, [path=file:[not included in comparison]/{warehouse_dir}/t1], Append, `spark_catalog`.`default`.`t1`, org.apache.spark.sql.execution.datasources.CatalogFileIndex(file:[not included in comparison]/{warehouse_dir}/t1), [key, value, ds]
++- Project [key#x, value#x, cast(2017-08-03 as string) AS ds#x]
+   +- Project [cast(col1#x as string) AS key#x, cast(col2#x as int) AS value#x]
+      +- LocalRelation [col1#x, col2#x]
+
+
+-- !query
+CREATE TABLE t2 (key STRING, value INT, ds STRING, hr INT) USING parquet PARTITIONED BY (ds, hr)
+-- !query analysis
+org.apache.spark.sql.catalyst.analysis.TableAlreadyExistsException
+{
+  "errorClass" : "TABLE_OR_VIEW_ALREADY_EXISTS",
+  "sqlState" : "42P07",
+  "messageParameters" : {
+    "relationName" : "`spark_catalog`.`default`.`t2`"
+  }
+}
+
+
+-- !query
+INSERT INTO TABLE t2 PARTITION (ds='2017-08-01', hr=7)
+VALUES ('k1', 10)
+-- !query analysis
+InsertIntoHadoopFsRelationCommand file:[not included in comparison]/{warehouse_dir}/t2, [ds=2017-08-01, hr=7], false, [ds#x, hr#x], Parquet, [path=file:[not included in comparison]/{warehouse_dir}/t2], Append, `spark_catalog`.`default`.`t2`, org.apache.spark.sql.execution.datasources.CatalogFileIndex(file:[not included in comparison]/{warehouse_dir}/t2), [key, value, ds, hr]
++- Project [key#x, value#x, cast(2017-08-01 as string) AS ds#x, cast(7 as int) AS hr#x]
+   +- Project [cast(col1#x as string) AS key#x, cast(col2#x as int) AS value#x]
+      +- LocalRelation [col1#x, col2#x]
+
+
+-- !query
+INSERT INTO TABLE t2 PARTITION (ds='2017-08-01', hr=8)
+VALUES ('k1', 11), ('k2', 21)
+-- !query analysis
+InsertIntoHadoopFsRelationCommand file:[not included in comparison]/{warehouse_dir}/t2, [ds=2017-08-01, hr=8], false, [ds#x, hr#x], Parquet, [path=file:[not included in comparison]/{warehouse_dir}/t2], Append, `spark_catalog`.`default`.`t2`, org.apache.spark.sql.execution.datasources.CatalogFileIndex(file:[not included in comparison]/{warehouse_dir}/t2), [key, value, ds, hr]
++- Project [key#x, value#x, cast(2017-08-01 as string) AS ds#x, cast(8 as int) AS hr#x]
+   +- Project [cast(col1#x as string) AS key#x, cast(col2#x as int) AS value#x]
+      +- LocalRelation [col1#x, col2#x]
+
+
+-- !query
+INSERT INTO TABLE t2 PARTITION (ds='2017-08-01', hr=9)
+VALUES ('k1', 12), ('k2', 22), ('k3', 32)
+-- !query analysis
+InsertIntoHadoopFsRelationCommand file:[not included in comparison]/{warehouse_dir}/t2, [ds=2017-08-01, hr=9], false, [ds#x, hr#x], Parquet, [path=file:[not included in comparison]/{warehouse_dir}/t2], Append, `spark_catalog`.`default`.`t2`, org.apache.spark.sql.execution.datasources.CatalogFileIndex(file:[not included in comparison]/{warehouse_dir}/t2), [key, value, ds, hr]
++- Project [key#x, value#x, cast(2017-08-01 as string) AS ds#x, cast(9 as int) AS hr#x]
+   +- Project [cast(col1#x as string) AS key#x, cast(col2#x as int) AS value#x]
+      +- LocalRelation [col1#x, col2#x]
+
+
+-- !query
+INSERT INTO TABLE t2 PARTITION (ds='2017-08-01', hr=10)
+VALUES ('k1', 100), ('k2', 200), ('k3', 300), ('k4', 400)
+-- !query analysis
+InsertIntoHadoopFsRelationCommand file:[not included in comparison]/{warehouse_dir}/t2, [ds=2017-08-01, hr=10], false, [ds#x, hr#x], Parquet, [path=file:[not included in comparison]/{warehouse_dir}/t2], Append, `spark_catalog`.`default`.`t2`, org.apache.spark.sql.execution.datasources.CatalogFileIndex(file:[not included in comparison]/{warehouse_dir}/t2), [key, value, ds, hr]
++- Project [key#x, value#x, cast(2017-08-01 as string) AS ds#x, cast(10 as int) AS hr#x]
+   +- Project [cast(col1#x as string) AS key#x, cast(col2#x as int) AS value#x]
+      +- LocalRelation [col1#x, col2#x]
+
+
+-- !query
+INSERT INTO TABLE t2 PARTITION (ds='2017-08-02', hr=7)
+VALUES ('k1', 10)
+-- !query analysis
+InsertIntoHadoopFsRelationCommand file:[not included in comparison]/{warehouse_dir}/t2, [ds=2017-08-02, hr=7], false, [ds#x, hr#x], Parquet, [path=file:[not included in comparison]/{warehouse_dir}/t2], Append, `spark_catalog`.`default`.`t2`, org.apache.spark.sql.execution.datasources.CatalogFileIndex(file:[not included in comparison]/{warehouse_dir}/t2), [key, value, ds, hr]
++- Project [key#x, value#x, cast(2017-08-02 as string) AS ds#x, cast(7 as int) AS hr#x]
+   +- Project [cast(col1#x as string) AS key#x, cast(col2#x as int) AS value#x]
+      +- LocalRelation [col1#x, col2#x]
+
+
+-- !query
+INSERT INTO TABLE t2 PARTITION (ds='2017-08-02', hr=8)
+VALUES ('k1', 11), ('k2', 21)
+-- !query analysis
+InsertIntoHadoopFsRelationCommand file:[not included in comparison]/{warehouse_dir}/t2, [ds=2017-08-02, hr=8], false, [ds#x, hr#x], Parquet, [path=file:[not included in comparison]/{warehouse_dir}/t2], Append, `spark_catalog`.`default`.`t2`, org.apache.spark.sql.execution.datasources.CatalogFileIndex(file:[not included in comparison]/{warehouse_dir}/t2), [key, value, ds, hr]
++- Project [key#x, value#x, cast(2017-08-02 as string) AS ds#x, cast(8 as int) AS hr#x]
+   +- Project [cast(col1#x as string) AS key#x, cast(col2#x as int) AS value#x]
+      +- LocalRelation [col1#x, col2#x]
+
+
+-- !query
+INSERT INTO TABLE t2 PARTITION (ds='2017-08-02', hr=9)
+VALUES ('k1', 12), ('k2', 22), ('k3', 32)
+-- !query analysis
+InsertIntoHadoopFsRelationCommand file:[not included in comparison]/{warehouse_dir}/t2, [ds=2017-08-02, hr=9], false, [ds#x, hr#x], Parquet, [path=file:[not included in comparison]/{warehouse_dir}/t2], Append, `spark_catalog`.`default`.`t2`, org.apache.spark.sql.execution.datasources.CatalogFileIndex(file:[not included in comparison]/{warehouse_dir}/t2), [key, value, ds, hr]
++- Project [key#x, value#x, cast(2017-08-02 as string) AS ds#x, cast(9 as int) AS hr#x]
+   +- Project [cast(col1#x as string) AS key#x, cast(col2#x as int) AS value#x]
+      +- LocalRelation [col1#x, col2#x]
+
+
+-- !query
+INSERT INTO TABLE t2 PARTITION (ds='2017-08-02', hr=10)
+VALUES ('k1', 110), ('k2', 210), ('k3', 310), ('k4', 410)
+-- !query analysis
+InsertIntoHadoopFsRelationCommand file:[not included in comparison]/{warehouse_dir}/t2, [ds=2017-08-02, hr=10], false, [ds#x, hr#x], Parquet, [path=file:[not included in comparison]/{warehouse_dir}/t2], Append, `spark_catalog`.`default`.`t2`, org.apache.spark.sql.execution.datasources.CatalogFileIndex(file:[not included in comparison]/{warehouse_dir}/t2), [key, value, ds, hr]
++- Project [key#x, value#x, cast(2017-08-02 as string) AS ds#x, cast(10 as int) AS hr#x]
+   +- Project [cast(col1#x as string) AS key#x, cast(col2#x as int) AS value#x]
+      +- LocalRelation [col1#x, col2#x]
+
+
+-- !query
+INSERT INTO TABLE t2 PARTITION (ds='2017-08-03', hr=10)
+VALUES ('k1', 120), ('k2', 220), ('k3', 320), ('k4', 420)
+-- !query analysis
+InsertIntoHadoopFsRelationCommand file:[not included in comparison]/{warehouse_dir}/t2, [ds=2017-08-03, hr=10], false, [ds#x, hr#x], Parquet, [path=file:[not included in comparison]/{warehouse_dir}/t2], Append, `spark_catalog`.`default`.`t2`, org.apache.spark.sql.execution.datasources.CatalogFileIndex(file:[not included in comparison]/{warehouse_dir}/t2), [key, value, ds, hr]
++- Project [key#x, value#x, cast(2017-08-03 as string) AS ds#x, cast(10 as int) AS hr#x]
+   +- Project [cast(col1#x as string) AS key#x, cast(col2#x as int) AS value#x]
+      +- LocalRelation [col1#x, col2#x]
+
+
+-- !query
 SELECT a, COUNT(b) FROM testData
 -- !query analysis
 org.apache.spark.sql.catalyst.ExtendedAnalysisException
@@ -1171,3 +1317,89 @@ Aggregate [c#x], [(c#x * 2) AS d#x]
          +- Project [if ((a#x < 0)) 0 else a#x AS b#x]
             +- SubqueryAlias t1
                +- LocalRelation [a#x]
+
+
+-- !query
+SELECT ds, MAX(value), MIN(value), SUM(value) FROM t1 GROUP BY ds
+-- !query analysis
+Aggregate [ds#x], [ds#x, max(value#x) AS max(value)#x, min(value#x) AS min(value)#x, sum(value#x) AS sum(value)#xL]
++- SubqueryAlias spark_catalog.default.t1
+   +- Relation spark_catalog.default.t1[key#x,value#x,ds#x] parquet
+
+
+-- !query
+SELECT ds, MAX(value), MIN(value), SUM(value) FROM t1 GROUP BY ds ORDER BY ds
+-- !query analysis
+Sort [ds#x ASC NULLS FIRST], true
++- Aggregate [ds#x], [ds#x, max(value#x) AS max(value)#x, min(value#x) AS min(value)#x, sum(value#x) AS sum(value)#xL]
+   +- SubqueryAlias spark_catalog.default.t1
+      +- Relation spark_catalog.default.t1[key#x,value#x,ds#x] parquet
+
+
+-- !query
+SELECT ds, MAX(value), MIN(value), SUM(value), AVG(value) FROM t1 GROUP BY ds
+-- !query analysis
+Aggregate [ds#x], [ds#x, max(value#x) AS max(value)#x, min(value#x) AS min(value)#x, sum(value#x) AS sum(value)#xL, avg(value#x) AS avg(value)#x]
++- SubqueryAlias spark_catalog.default.t1
+   +- Relation spark_catalog.default.t1[key#x,value#x,ds#x] parquet
+
+
+-- !query
+SELECT ds, MAX(value), MIN(value), SUM(value) FROM t2 GROUP BY ds
+-- !query analysis
+Aggregate [ds#x], [ds#x, max(value#x) AS max(value)#x, min(value#x) AS min(value)#x, sum(value#x) AS sum(value)#xL]
++- SubqueryAlias spark_catalog.default.t2
+   +- Relation spark_catalog.default.t2[key#x,value#x,ds#x,hr#x] parquet
+
+
+-- !query
+SELECT ds, MAX(value), MIN(value), SUM(value) FROM t2 GROUP BY ds ORDER BY ds
+-- !query analysis
+Sort [ds#x ASC NULLS FIRST], true
++- Aggregate [ds#x], [ds#x, max(value#x) AS max(value)#x, min(value#x) AS min(value)#x, sum(value#x) AS sum(value)#xL]
+   +- SubqueryAlias spark_catalog.default.t2
+      +- Relation spark_catalog.default.t2[key#x,value#x,ds#x,hr#x] parquet
+
+
+-- !query
+SELECT ds, MAX(value), MIN(value), SUM(value), AVG(value) FROM t2 GROUP BY ds
+-- !query analysis
+Aggregate [ds#x], [ds#x, max(value#x) AS max(value)#x, min(value#x) AS min(value)#x, sum(value#x) AS sum(value)#xL, avg(value#x) AS avg(value)#x]
++- SubqueryAlias spark_catalog.default.t2
+   +- Relation spark_catalog.default.t2[key#x,value#x,ds#x,hr#x] parquet
+
+
+-- !query
+SELECT ds, hr, MAX(value), MIN(value), SUM(value) FROM t2 GROUP BY ds, hr ORDER BY ds, hr
+-- !query analysis
+Sort [ds#x ASC NULLS FIRST, hr#x ASC NULLS FIRST], true
++- Aggregate [ds#x, hr#x], [ds#x, hr#x, max(value#x) AS max(value)#x, min(value#x) AS min(value)#x, sum(value#x) AS sum(value)#xL]
+   +- SubqueryAlias spark_catalog.default.t2
+      +- Relation spark_catalog.default.t2[key#x,value#x,ds#x,hr#x] parquet
+
+
+-- !query
+SELECT ds, hr, MAX(value), MIN(value), SUM(value), AVG(value) FROM t2 GROUP BY ds, hr ORDER BY ds, hr
+-- !query analysis
+Sort [ds#x ASC NULLS FIRST, hr#x ASC NULLS FIRST], true
++- Aggregate [ds#x, hr#x], [ds#x, hr#x, max(value#x) AS max(value)#x, min(value#x) AS min(value)#x, sum(value#x) AS sum(value)#xL, avg(value#x) AS avg(value)#x]
+   +- SubqueryAlias spark_catalog.default.t2
+      +- Relation spark_catalog.default.t2[key#x,value#x,ds#x,hr#x] parquet
+
+
+-- !query
+SELECT hr, MAX(value), MIN(value), SUM(value) FROM t2 GROUP BY hr ORDER BY hr
+-- !query analysis
+Sort [hr#x ASC NULLS FIRST], true
++- Aggregate [hr#x], [hr#x, max(value#x) AS max(value)#x, min(value#x) AS min(value)#x, sum(value#x) AS sum(value)#xL]
+   +- SubqueryAlias spark_catalog.default.t2
+      +- Relation spark_catalog.default.t2[key#x,value#x,ds#x,hr#x] parquet
+
+
+-- !query
+SELECT hr, ds, MAX(value), MIN(value), SUM(value) FROM t2 GROUP BY hr, ds ORDER BY hr, ds
+-- !query analysis
+Sort [hr#x ASC NULLS FIRST, ds#x ASC NULLS FIRST], true
++- Aggregate [hr#x, ds#x], [hr#x, ds#x, max(value#x) AS max(value)#x, min(value#x) AS min(value)#x, sum(value#x) AS sum(value)#xL]
+   +- SubqueryAlias spark_catalog.default.t2
+      +- Relation spark_catalog.default.t2[key#x,value#x,ds#x,hr#x] parquet

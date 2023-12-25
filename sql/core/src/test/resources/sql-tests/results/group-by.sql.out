@@ -10,6 +10,130 @@ struct<>
 
 
 -- !query
+CREATE TABLE t1 (key STRING, value INT, ds STRING) USING parquet PARTITIONED BY (ds)
+-- !query schema
+struct<>
+-- !query output
+
+
+
+-- !query
+INSERT INTO TABLE t1 PARTITION (ds='2017-08-01')
+VALUES ('k1', 100), ('k2', 200), ('k3', 300), ('k4', 400)
+-- !query schema
+struct<>
+-- !query output
+
+
+
+-- !query
+INSERT INTO TABLE t1 PARTITION (ds='2017-08-02')
+VALUES ('k1', 110), ('k2', 210), ('k3', 310), ('k4', 410)
+-- !query schema
+struct<>
+-- !query output
+
+
+
+-- !query
+INSERT INTO TABLE t1 PARTITION (ds='2017-08-03')
+VALUES ('k1', 120), ('k3', 320), ('k4', 420)
+-- !query schema
+struct<>
+-- !query output
+
+
+
+-- !query
+CREATE TABLE t2 (key STRING, value INT, ds STRING, hr INT) USING parquet PARTITIONED BY (ds, hr)
+-- !query schema
+struct<>
+-- !query output
+
+
+
+-- !query
+INSERT INTO TABLE t2 PARTITION (ds='2017-08-01', hr=7)
+VALUES ('k1', 10)
+-- !query schema
+struct<>
+-- !query output
+
+
+
+-- !query
+INSERT INTO TABLE t2 PARTITION (ds='2017-08-01', hr=8)
+VALUES ('k1', 11), ('k2', 21)
+-- !query schema
+struct<>
+-- !query output
+
+
+
+-- !query
+INSERT INTO TABLE t2 PARTITION (ds='2017-08-01', hr=9)
+VALUES ('k1', 12), ('k2', 22), ('k3', 32)
+-- !query schema
+struct<>
+-- !query output
+
+
+
+-- !query
+INSERT INTO TABLE t2 PARTITION (ds='2017-08-01', hr=10)
+VALUES ('k1', 100), ('k2', 200), ('k3', 300), ('k4', 400)
+-- !query schema
+struct<>
+-- !query output
+
+
+
+-- !query
+INSERT INTO TABLE t2 PARTITION (ds='2017-08-02', hr=7)
+VALUES ('k1', 10)
+-- !query schema
+struct<>
+-- !query output
+
+
+
+-- !query
+INSERT INTO TABLE t2 PARTITION (ds='2017-08-02', hr=8)
+VALUES ('k1', 11), ('k2', 21)
+-- !query schema
+struct<>
+-- !query output
+
+
+
+-- !query
+INSERT INTO TABLE t2 PARTITION (ds='2017-08-02', hr=9)
+VALUES ('k1', 12), ('k2', 22), ('k3', 32)
+-- !query schema
+struct<>
+-- !query output
+
+
+
+-- !query
+INSERT INTO TABLE t2 PARTITION (ds='2017-08-02', hr=10)
+VALUES ('k1', 110), ('k2', 210), ('k3', 310), ('k4', 410)
+-- !query schema
+struct<>
+-- !query output
+
+
+
+-- !query
+INSERT INTO TABLE t2 PARTITION (ds='2017-08-03', hr=10)
+VALUES ('k1', 120), ('k2', 220), ('k3', 320), ('k4', 420)
+-- !query schema
+struct<>
+-- !query output
+
+
+
+-- !query
 SELECT a, COUNT(b) FROM testData
 -- !query schema
 struct<>
@@ -1102,3 +1226,122 @@ struct<d:int>
 -- !query output
 0
 2
+
+
+-- !query
+SELECT ds, MAX(value), MIN(value), SUM(value) FROM t1 GROUP BY ds
+-- !query schema
+struct<ds:string,max(value):int,min(value):int,sum(value):bigint>
+-- !query output
+2017-08-01	400	100	1000
+2017-08-02	410	110	1040
+2017-08-03	420	120	860
+
+
+-- !query
+SELECT ds, MAX(value), MIN(value), SUM(value) FROM t1 GROUP BY ds ORDER BY ds
+-- !query schema
+struct<ds:string,max(value):int,min(value):int,sum(value):bigint>
+-- !query output
+2017-08-01	400	100	1000
+2017-08-02	410	110	1040
+2017-08-03	420	120	860
+
+
+-- !query
+SELECT ds, MAX(value), MIN(value), SUM(value), AVG(value) FROM t1 GROUP BY ds
+-- !query schema
+struct<ds:string,max(value):int,min(value):int,sum(value):bigint,avg(value):double>
+-- !query output
+2017-08-01	400	100	1000	250.0
+2017-08-02	410	110	1040	260.0
+2017-08-03	420	120	860	286.6666666666667
+
+
+-- !query
+SELECT ds, MAX(value), MIN(value), SUM(value) FROM t2 GROUP BY ds
+-- !query schema
+struct<ds:string,max(value):int,min(value):int,sum(value):bigint>
+-- !query output
+2017-08-01	400	10	1108
+2017-08-02	410	10	1148
+2017-08-03	420	120	1080
+
+
+-- !query
+SELECT ds, MAX(value), MIN(value), SUM(value) FROM t2 GROUP BY ds ORDER BY ds
+-- !query schema
+struct<ds:string,max(value):int,min(value):int,sum(value):bigint>
+-- !query output
+2017-08-01	400	10	1108
+2017-08-02	410	10	1148
+2017-08-03	420	120	1080
+
+
+-- !query
+SELECT ds, MAX(value), MIN(value), SUM(value), AVG(value) FROM t2 GROUP BY ds
+-- !query schema
+struct<ds:string,max(value):int,min(value):int,sum(value):bigint,avg(value):double>
+-- !query output
+2017-08-01	400	10	1108	110.8
+2017-08-02	410	10	1148	114.8
+2017-08-03	420	120	1080	270.0
+
+
+-- !query
+SELECT ds, hr, MAX(value), MIN(value), SUM(value) FROM t2 GROUP BY ds, hr ORDER BY ds, hr
+-- !query schema
+struct<ds:string,hr:int,max(value):int,min(value):int,sum(value):bigint>
+-- !query output
+2017-08-01	7	10	10	10
+2017-08-01	8	21	11	32
+2017-08-01	9	32	12	66
+2017-08-01	10	400	100	1000
+2017-08-02	7	10	10	10
+2017-08-02	8	21	11	32
+2017-08-02	9	32	12	66
+2017-08-02	10	410	110	1040
+2017-08-03	10	420	120	1080
+
+
+-- !query
+SELECT ds, hr, MAX(value), MIN(value), SUM(value), AVG(value) FROM t2 GROUP BY ds, hr ORDER BY ds, hr
+-- !query schema
+struct<ds:string,hr:int,max(value):int,min(value):int,sum(value):bigint,avg(value):double>
+-- !query output
+2017-08-01	7	10	10	10	10.0
+2017-08-01	8	21	11	32	16.0
+2017-08-01	9	32	12	66	22.0
+2017-08-01	10	400	100	1000	250.0
+2017-08-02	7	10	10	10	10.0
+2017-08-02	8	21	11	32	16.0
+2017-08-02	9	32	12	66	22.0
+2017-08-02	10	410	110	1040	260.0
+2017-08-03	10	420	120	1080	270.0
+
+
+-- !query
+SELECT hr, MAX(value), MIN(value), SUM(value) FROM t2 GROUP BY hr ORDER BY hr
+-- !query schema
+struct<hr:int,max(value):int,min(value):int,sum(value):bigint>
+-- !query output
+7	10	10	20
+8	21	11	64
+9	32	12	132
+10	420	100	3120
+
+
+-- !query
+SELECT hr, ds, MAX(value), MIN(value), SUM(value) FROM t2 GROUP BY hr, ds ORDER BY hr, ds
+-- !query schema
+struct<hr:int,ds:string,max(value):int,min(value):int,sum(value):bigint>
+-- !query output
+7	2017-08-01	10	10	10
+7	2017-08-02	10	10	10
+8	2017-08-01	21	11	32
+8	2017-08-02	21	11	32
+9	2017-08-01	32	12	66
+9	2017-08-02	32	12	66
+10	2017-08-01	400	100	1000
+10	2017-08-02	410	110	1040
+10	2017-08-03	420	120	1080

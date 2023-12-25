@@ -20,8 +20,10 @@ package org.apache.spark.sql.execution.aggregate
 import org.apache.spark.sql.AnalysisException
 import org.apache.spark.sql.catalyst.expressions._
 import org.apache.spark.sql.catalyst.expressions.aggregate._
-import org.apache.spark.sql.catalyst.plans.logical.Aggregate
-import org.apache.spark.sql.execution.SparkPlan
+import org.apache.spark.sql.catalyst.plans.logical.{Aggregate, LogicalPlan, Project}
+import org.apache.spark.sql.execution.{PlanLater, SparkPlan}
+import org.apache.spark.sql.execution.adaptive.LogicalQueryStage
+import org.apache.spark.sql.execution.datasources.{HadoopFsRelation, LogicalRelation}
 import org.apache.spark.sql.execution.streaming._
 import org.apache.spark.sql.internal.SQLConf
 import org.apache.spark.util.Utils
@@ -120,6 +122,41 @@ object AggUtils {
     }
   }
 
+  private def canEliminateAggregate(
+      groupingAttributes: Seq[Attribute],
+      aggregateExpressions: Seq[AggregateExpression],
+      plan: SparkPlan): Boolean = {
+    def isSupportedAggregateFunction(aggFunc: AggregateFunction): Boolean = aggFunc match {
+      case _: Max | _: Min | _: Sum | _: Count => true
+      case _ => false
+    }
+
+    def groupingMatchedPartition(logicalPlan: LogicalPlan): Boolean = logicalPlan match {
+      case Project(_, l @ LogicalRelation(fs: HadoopFsRelation, _, _, _))
+        if fs.partitionSchema.nonEmpty =>
+        val partitionColumns = AttributeSet(
+          l.resolve(fs.partitionSchema, fs.sparkSession.sessionState.analyzer.resolver))
+        if (AttributeSet(groupingAttributes).subsetOf(partitionColumns)) {
+          true
+        } else {
+          false
+        }
+      case _ => false
+    }
+
+    groupingAttributes.nonEmpty &&
+      aggregateExpressions.forall(agg => isSupportedAggregateFunction(agg.aggregateFunction)) && {
+      plan match {
+        case PlanLater(LogicalQueryStage(p, _)) =>
+          groupingMatchedPartition(p)
+        case PlanLater(p) =>
+          groupingMatchedPartition(p)
+        case _ =>
+          false
+      }
+    }
+  }
+
   def planAggregateWithoutDistinct(
       groupingExpressions: Seq[NamedExpression],
       aggregateExpressions: Seq[AggregateExpression],
@@ -127,9 +164,28 @@ object AggUtils {
       child: SparkPlan): Seq[SparkPlan] = {
     // Check if we can use HashAggregate.
 
-    // 1. Create an Aggregate Operator for partial aggregations.
-
     val groupingAttributes = groupingExpressions.map(_.toAttribute)
+
+    if (canEliminateAggregate(groupingAttributes, aggregateExpressions, child)) {
+      val completeAggregateExpressions = aggregateExpressions.map(_.copy(mode = Complete))
+      // The attributes of the final aggregation buffer, which is presented as input to the result
+      // projection:
+      val completeAggregateAttributes = completeAggregateExpressions.map(_.resultAttribute)
+
+      // Create an Aggregate Operator for complete aggregations.
+      val finalAggregate = createAggregate(
+        requiredChildDistributionExpressions = Some(groupingAttributes),
+        groupingExpressions = groupingAttributes,
+        aggregateExpressions = completeAggregateExpressions,
+        aggregateAttributes = completeAggregateAttributes,
+        initialInputBufferOffset = groupingExpressions.length,
+        resultExpressions = resultExpressions,
+        child = child)
+
+      return finalAggregate :: Nil
+    }
+
+    // 1. Create an Aggregate Operator for partial aggregations.
     val partialAggregateExpressions = aggregateExpressions.map(_.copy(mode = Partial))
     val partialAggregateAttributes =
       partialAggregateExpressions.flatMap(_.aggregateFunction.aggBufferAttributes)
@@ -158,13 +214,13 @@ object AggUtils {
     val finalAggregateAttributes = finalAggregateExpressions.map(_.resultAttribute)
 
     val finalAggregate = createAggregate(
-        requiredChildDistributionExpressions = Some(groupingAttributes),
-        groupingExpressions = groupingAttributes,
-        aggregateExpressions = finalAggregateExpressions,
-        aggregateAttributes = finalAggregateAttributes,
-        initialInputBufferOffset = groupingExpressions.length,
-        resultExpressions = resultExpressions,
-        child = interExec)
+      requiredChildDistributionExpressions = Some(groupingAttributes),
+      groupingExpressions = groupingAttributes,
+      aggregateExpressions = finalAggregateExpressions,
+      aggregateAttributes = finalAggregateAttributes,
+      initialInputBufferOffset = groupingExpressions.length,
+      resultExpressions = resultExpressions,
+      child = interExec)
 
     finalAggregate :: Nil
   }

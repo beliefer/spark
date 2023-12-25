@@ -8,6 +8,34 @@ CREATE OR REPLACE TEMPORARY VIEW testData AS SELECT * FROM VALUES
 (1, 1), (1, 2), (2, 1), (2, 2), (3, 1), (3, 2), (null, 1), (3, null), (null, null)
 AS testData(a, b);
 
+CREATE TABLE t1 (key STRING, value INT, ds STRING) USING parquet PARTITIONED BY (ds);
+INSERT INTO TABLE t1 PARTITION (ds='2017-08-01')
+VALUES ('k1', 100), ('k2', 200), ('k3', 300), ('k4', 400);
+INSERT INTO TABLE t1 PARTITION (ds='2017-08-02')
+VALUES ('k1', 110), ('k2', 210), ('k3', 310), ('k4', 410);
+INSERT INTO TABLE t1 PARTITION (ds='2017-08-03')
+VALUES ('k1', 120), ('k3', 320), ('k4', 420);
+
+CREATE TABLE t2 (key STRING, value INT, ds STRING, hr INT) USING parquet PARTITIONED BY (ds, hr);
+INSERT INTO TABLE t2 PARTITION (ds='2017-08-01', hr=7)
+VALUES ('k1', 10);
+INSERT INTO TABLE t2 PARTITION (ds='2017-08-01', hr=8)
+VALUES ('k1', 11), ('k2', 21);
+INSERT INTO TABLE t2 PARTITION (ds='2017-08-01', hr=9)
+VALUES ('k1', 12), ('k2', 22), ('k3', 32);
+INSERT INTO TABLE t2 PARTITION (ds='2017-08-01', hr=10)
+VALUES ('k1', 100), ('k2', 200), ('k3', 300), ('k4', 400);
+INSERT INTO TABLE t2 PARTITION (ds='2017-08-02', hr=7)
+VALUES ('k1', 10);
+INSERT INTO TABLE t2 PARTITION (ds='2017-08-02', hr=8)
+VALUES ('k1', 11), ('k2', 21);
+INSERT INTO TABLE t2 PARTITION (ds='2017-08-02', hr=9)
+VALUES ('k1', 12), ('k2', 22), ('k3', 32);
+INSERT INTO TABLE t2 PARTITION (ds='2017-08-02', hr=10)
+VALUES ('k1', 110), ('k2', 210), ('k3', 310), ('k4', 410);
+INSERT INTO TABLE t2 PARTITION (ds='2017-08-03', hr=10)
+VALUES ('k1', 120), ('k2', 220), ('k3', 320), ('k4', 420);
+
 -- Aggregate with empty GroupBy expressions.
 SELECT a, COUNT(b) FROM testData;
 SELECT COUNT(a), COUNT(b) FROM testData;
@@ -259,3 +287,15 @@ FROM (
          GROUP BY b
      ) t3
 GROUP BY c;
+
+-- SPARK-46491: Eliminate the aggregation if the group keys is the subset of the partition keys
+SELECT ds, MAX(value), MIN(value), SUM(value) FROM t1 GROUP BY ds;
+SELECT ds, MAX(value), MIN(value), SUM(value) FROM t1 GROUP BY ds ORDER BY ds;
+SELECT ds, MAX(value), MIN(value), SUM(value), AVG(value) FROM t1 GROUP BY ds;
+SELECT ds, MAX(value), MIN(value), SUM(value) FROM t2 GROUP BY ds;
+SELECT ds, MAX(value), MIN(value), SUM(value) FROM t2 GROUP BY ds ORDER BY ds;
+SELECT ds, MAX(value), MIN(value), SUM(value), AVG(value) FROM t2 GROUP BY ds;
+SELECT ds, hr, MAX(value), MIN(value), SUM(value) FROM t2 GROUP BY ds, hr ORDER BY ds, hr;
+SELECT ds, hr, MAX(value), MIN(value), SUM(value), AVG(value) FROM t2 GROUP BY ds, hr ORDER BY ds, hr;
+SELECT hr, MAX(value), MIN(value), SUM(value) FROM t2 GROUP BY hr ORDER BY hr;
+SELECT hr, ds, MAX(value), MIN(value), SUM(value) FROM t2 GROUP BY hr, ds ORDER BY hr, ds;
