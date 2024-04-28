@@ -17,8 +17,6 @@
 
 package org.apache.spark.sql.catalyst.optimizer
 
-import scala.annotation.tailrec
-
 import org.apache.spark.sql.catalyst.expressions._
 import org.apache.spark.sql.catalyst.expressions.aggregate.BloomFilterAggregate
 import org.apache.spark.sql.catalyst.planning.ExtractEquiJoinKeys
@@ -49,14 +47,45 @@ object InjectRuntimeFilter extends Rule[LogicalPlan] with PredicateHelper with J
     )
   }
 
+  private def hasSelectiveDynamicPruningSubquery(plan: LogicalPlan): Boolean = {
+    plan.find {
+      case Filter(condition, partPlan) =>
+        val ratios = splitConjunctivePredicates(condition).collect {
+          case DynamicPruningSubquery(pruningKey, buildPlan, buildKeys, indices, _, _, _) =>
+            require(indices.size == 1, "DPP Filters should only have a single broadcasting key " +
+              "since there are no usage for multiple broadcasting keys at the moment.")
+            val buildKey = buildKeys(indices.head)
+            val filterRatio =
+              estimateFilteringRatio(pruningKey, partPlan, buildKey, buildPlan, conf)
+            1 - filterRatio
+        }
+
+        if (ratios.isEmpty) {
+          false
+        } else {
+          val finalRatio = ratios.reduce(_ * _)
+          finalRatio * partPlan.stats.sizeInBytes.toDouble <=
+            conf.runtimeFilterCreationSideThreshold
+        }
+      case _ => false
+    }.isDefined
+  }
+
   private def injectBloomFilter(
       filterApplicationSideKey: Expression,
       filterApplicationSidePlan: LogicalPlan,
       filterCreationSideKey: Expression,
       filterCreationSidePlan: LogicalPlan): LogicalPlan = {
     // Skip if the filter creation side is too big
-    if (filterCreationSidePlan.stats.sizeInBytes > conf.runtimeFilterCreationSideThreshold) {
-      return filterApplicationSidePlan
+    filterCreationSidePlan match {
+      case ProjectAdapter(_, child) =>
+        if (!hasSelectiveDynamicPruningSubquery(child)) {
+          return filterApplicationSidePlan
+        }
+      case _ =>
+        if (filterCreationSidePlan.stats.sizeInBytes > conf.runtimeFilterCreationSideThreshold) {
+          return filterApplicationSidePlan
+        }
     }
     val rowCount = filterCreationSidePlan.stats.rowCount
     val bloomFilterAgg =
@@ -69,7 +98,13 @@ object InjectRuntimeFilter extends Rule[LogicalPlan] with PredicateHelper with J
     val alias = Alias(bloomFilterAgg.toAggregateExpression(), "bloomFilter")()
     val aggregate =
       ConstantFolding(ColumnPruning(Aggregate(Nil, Seq(alias), filterCreationSidePlan)))
-    val bloomFilterSubquery = ScalarSubquery(aggregate, Nil)
+    val bloomFilterSubquery = filterCreationSidePlan match {
+      case _: ProjectAdapter =>
+        // Try to reuse the results of exchange.
+        RuntimeFilterSubquery(filterApplicationSideKey, aggregate, filterCreationSideKey)
+      case _ =>
+        ScalarSubquery(aggregate, Nil)
+    }
     val filter = BloomFilterMightContain(bloomFilterSubquery,
       new XxHash64(Seq(filterApplicationSideKey)))
     Filter(filter, filterApplicationSidePlan)
@@ -113,13 +148,23 @@ object InjectRuntimeFilter extends Rule[LogicalPlan] with PredicateHelper with J
         extract(child, predicateReference, hasHitFilter, hasHitSelectiveFilter, currentPlan,
           targetKey)
       case Filter(condition, child) if isSimpleExpression(condition) =>
-        extract(
+        val (dynamicPrunings, otherPredicates) =
+          splitConjunctivePredicates(condition).partition(_.isInstanceOf[DynamicPruningSubquery])
+
+        val existsLikelySelective = otherPredicates.exists(isLikelySelective)
+        val extracted = extract(
           child,
           predicateReference ++ condition.references,
           hasHitFilter = true,
-          hasHitSelectiveFilter = hasHitSelectiveFilter || isLikelySelective(condition),
+          hasHitSelectiveFilter = hasHitSelectiveFilter || existsLikelySelective ||
+            dynamicPrunings.nonEmpty,
           currentPlan,
           targetKey)
+        if (conf.exchangeReuseEnabled && !existsLikelySelective && dynamicPrunings.nonEmpty) {
+          extracted.map(kv => (kv._1, ProjectAdapter(kv._2.output, kv._2)))
+        } else {
+          extracted
+        }
       case ExtractEquiJoinKeys(_, lkeys, rkeys, _, _, left, right, _) =>
         // Runtime filters use one side of the [[Join]] to build a set of join key values and prune
         // the other side of the [[Join]]. It's also OK to use a superset of the join key values
@@ -231,20 +276,30 @@ object InjectRuntimeFilter extends Rule[LogicalPlan] with PredicateHelper with J
   }
 
   // This checks if there is already a DPP filter, as this rule is called just after DPP.
-  @tailrec
   private def hasDynamicPruningSubquery(
       left: LogicalPlan,
       right: LogicalPlan,
       leftKey: Expression,
       rightKey: Expression): Boolean = {
-    (left, right) match {
-      case (Filter(DynamicPruningSubquery(pruningKey, _, _, _, _, _, _), plan), _) =>
-        pruningKey.fastEquals(leftKey) || hasDynamicPruningSubquery(plan, right, leftKey, rightKey)
-      case (_, Filter(DynamicPruningSubquery(pruningKey, _, _, _, _, _, _), plan)) =>
-        pruningKey.fastEquals(rightKey) ||
-          hasDynamicPruningSubquery(left, plan, leftKey, rightKey)
+    left.find {
+      case Filter(condition, plan) =>
+        splitConjunctivePredicates(condition).exists {
+          case DynamicPruningSubquery(pruningKey, _, _, _, _, _, _) =>
+            pruningKey.fastEquals(leftKey) ||
+              hasDynamicPruningSubquery(plan, right, leftKey, rightKey)
+          case _ => false
+        }
       case _ => false
-    }
+    }.isDefined || right.find {
+      case Filter(condition, plan) =>
+        splitConjunctivePredicates(condition).exists {
+          case DynamicPruningSubquery(pruningKey, _, _, _, _, _, _) =>
+            pruningKey.fastEquals(rightKey) ||
+              hasDynamicPruningSubquery(left, plan, leftKey, rightKey)
+          case _ => false
+        }
+      case _ => false
+    }.isDefined
   }
 
   private def hasBloomFilter(plan: LogicalPlan, key: Expression): Boolean = {

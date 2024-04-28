@@ -55,12 +55,14 @@ class SparkOptimizer(
       // twice which may break some optimizer rules that can only be applied once. The rule below
       // only invokes `OptimizeSubqueries` to optimize newly added subqueries.
       new RowLevelOperationRuntimeGroupFiltering(OptimizeSubqueries)) :+
+    Batch("Pushdown Filters from PartitionPruning", fixedPoint,
+      PushDownPredicates) :+
     Batch("InjectRuntimeFilter", FixedPoint(1),
       InjectRuntimeFilter) :+
     Batch("MergeScalarSubqueries", Once,
       MergeScalarSubqueries,
       RewriteDistinctAggregates) :+
-    Batch("Pushdown Filters from PartitionPruning", fixedPoint,
+    Batch("Pushdown Filters from RuntimeFilter", fixedPoint,
       PushDownPredicates) :+
     Batch("Cleanup filters that cannot be pushed down", Once,
       CleanupDynamicPruningFilters,
