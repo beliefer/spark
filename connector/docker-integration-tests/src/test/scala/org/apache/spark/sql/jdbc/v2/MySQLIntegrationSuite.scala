@@ -203,14 +203,23 @@ class MySQLIntegrationSuite extends DockerJDBCIntegrationV2Suite with V2JDBCTest
     assert(rows4(1).getString(0) === "alex")
     assert(rows4(2).getString(0) === "tom")
 
-    val df5 = sql(s"SELECT name FROM $tbl WHERE " +
-      "extract(WEEK from date1) > 10 AND extract(YEAR from date1) = 2022")
-    checkFilterPushed(df5)
-    val rows5 = df5.collect()
-    assert(rows5.length === 3)
-    assert(rows5(0).getString(0) === "amy")
-    assert(rows5(1).getString(0) === "alex")
-    assert(rows5(2).getString(0) === "tom")
+    val df51 = sql(s"SELECT name FROM $tbl WHERE " +
+      "extract(WEEK from date1) > 10")
+    checkFilterPushed(df51)
+    val rows51 = df51.collect()
+    assert(rows51.length === 3)
+    assert(rows51(0).getString(0) === "amy")
+    assert(rows51(1).getString(0) === "alex")
+    assert(rows51(2).getString(0) === "tom")
+
+    val df52 = sql(s"SELECT name FROM $tbl WHERE " +
+      "extract(YEAR from date1) = 2022")
+    checkFilterPushed(df52)
+    val rows52 = df52.collect()
+    assert(rows52.length === 3)
+    assert(rows52(0).getString(0) === "amy")
+    assert(rows52(1).getString(0) === "alex")
+    assert(rows52(2).getString(0) === "tom")
 
     val df6 = sql(s"SELECT name FROM $tbl WHERE date_add(date1, 1) = date'2022-05-20' " +
       "AND datediff(date1, '2022-05-10') > 0")
