@@ -122,7 +122,7 @@ class BarrierTaskContext private[spark] (
         throw e
     } finally {
       timerFuture.cancel(true)
-      ThreadUtils.shutdown(timer)
+      timer.purge()
     }
   }
 
