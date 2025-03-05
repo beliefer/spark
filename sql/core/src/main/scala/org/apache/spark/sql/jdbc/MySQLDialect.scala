@@ -60,7 +60,7 @@ private case class MySQLDialect() extends JdbcDialect with SQLConfHelper with No
         // The mode 3 means the first day of the week is Monday, the range of return value is 1-53
         // and week 1 is the first week with 4 or more days this year. In the other word, mode 3
         // has the same semantics as ISO week.
-        case "WEEK" => s"WEEK($source, 3)"
+        case "WEEK" => s"WEEKOFYEAR($source)"
         // MySQL doesn't support extract the ISO year. We use the case statements shown below to
         // get it.
         // CASE
