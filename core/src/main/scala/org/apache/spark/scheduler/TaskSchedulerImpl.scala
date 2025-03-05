@@ -18,14 +18,12 @@
 package org.apache.spark.scheduler
 
 import java.nio.ByteBuffer
-import java.util.{ArrayList, TimerTask}
-import java.util.Collections
-import java.util.concurrent.{ConcurrentHashMap, ScheduledFuture, TimeUnit}
+import java.util.TimerTask
+import java.util.concurrent.{ConcurrentHashMap, TimeUnit}
 import java.util.concurrent.atomic.AtomicLong
 
 import scala.collection.mutable
 import scala.collection.mutable.{ArrayBuffer, HashMap, HashSet}
-import scala.jdk.CollectionConverters._
 import scala.util.Random
 
 import com.google.common.cache.CacheBuilder
@@ -140,7 +138,6 @@ private[spark] class TaskSchedulerImpl(
   @volatile private var hasLaunchedTask = false
   private val starvationTimer = ThreadUtils.newDaemonSingleThreadScheduledExecutor(
     "task-starvation-timer")
-  private val starvationFutures = Collections.synchronizedList(new ArrayList[ScheduledFuture[_]])
 
   // Incrementing task IDs
   val nextTaskId = new AtomicLong(0)
@@ -172,7 +169,6 @@ private[spark] class TaskSchedulerImpl(
   protected val executorIdToHost = new HashMap[String, String]
 
   private val abortTimer = ThreadUtils.newDaemonSingleThreadScheduledExecutor("task-abort-timer")
-  private val abortFutures = Collections.synchronizedList(new ArrayList[ScheduledFuture[_]])
   // Exposed for testing
   val unschedulableTaskSetToExpiryTime = new HashMap[TaskSetManager, Long]
 
@@ -279,7 +275,7 @@ private[spark] class TaskSchedulerImpl(
       schedulableBuilder.addTaskSetManager(manager, manager.taskSet.properties)
 
       if (!isLocal && !hasReceivedTask) {
-        val starvationFuture = starvationTimer.scheduleAtFixedRate(new TimerTask() {
+        starvationTimer.scheduleAtFixedRate(new TimerTask() {
           override def run(): Unit = {
             if (!hasLaunchedTask) {
               logWarning("Initial job has not accepted any resources; " +
@@ -290,7 +286,6 @@ private[spark] class TaskSchedulerImpl(
             }
           }
         }, STARVATION_TIMEOUT_MS, STARVATION_TIMEOUT_MS, TimeUnit.MILLISECONDS)
-        starvationFutures.add(starvationFuture)
       }
       hasReceivedTask = true
     }
@@ -755,9 +750,8 @@ private[spark] class TaskSchedulerImpl(
     unschedulableTaskSetToExpiryTime(taskSet) = clock.getTimeMillis() + timeout
     logInfo(log"Waiting for ${MDC(LogKeys.TIMEOUT, timeout)} ms for completely " +
       log"excluded task to be schedulable again before aborting stage ${MDC(LogKeys.STAGE_ID, taskSet.stageId)}.")
-    val abortFuture = abortTimer.schedule(
+    abortTimer.schedule(
       createUnschedulableTaskSetAbortTimer(taskSet, taskIndex), timeout, TimeUnit.MILLISECONDS)
-    abortFutures.add(abortFuture)
   }
 
   private def createUnschedulableTaskSetAbortTimer(
@@ -965,9 +959,7 @@ private[spark] class TaskSchedulerImpl(
         barrierCoordinator.stop()
       }
     }
-    starvationFutures.asScala.foreach(_.cancel(false))
     ThreadUtils.shutdown(starvationTimer)
-    abortFutures.asScala.foreach(_.cancel(false))
     ThreadUtils.shutdown(abortTimer)
   }
 
